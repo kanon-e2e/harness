@@ -1,0 +1,95 @@
+# Plan 0012 §12, item 3 (Kanon issue #968): installation tokens expire after an hour.
+# Mints a read-only driver token scoped to this repository, reads the expiry GitHub reports
+# in the token-expiration response header, and, unless `wait` is off, confirms it by use:
+# the token must still work 55 minutes after the mint and fail 61 minutes after it.
+# Creates nothing.
+name: probe-03 installation token lifetime (item 3)
+
+on:
+  workflow_dispatch:
+    inputs:
+      wait:
+        description: Confirm by use (about 62 runner minutes); off reads the expiry header only
+        type: boolean
+        default: true
+
+permissions: {}
+
+concurrency:
+  group: probe-03
+  cancel-in-progress: false
+
+jobs:
+  probe:
+    name: measure the token's lifetime
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    environment: e2e
+    permissions: {}
+    steps:
+      - name: Note the time before the mint
+        id: before
+        run: echo "at=$(date -u +%s)" >> "$GITHUB_OUTPUT"
+
+      - name: Mint the driver's token (Metadata read, this repository only)
+        id: driver
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ secrets.DRIVER_APP_ID }}
+          private-key: ${{ secrets.DRIVER_APP_KEY }}
+          owner: kanon-e2e
+          repositories: harness
+          permission-metadata: read
+
+      - name: Read the expiry header
+        id: header
+        env:
+          GH_TOKEN: ${{ steps.driver.outputs.token }}
+          MINTED: ${{ steps.before.outputs.at }}
+        run: |
+          expiry=$(gh api -i "repos/$GITHUB_REPOSITORY" 2>/dev/null | tr -d '\r' | awk -F': ' 'tolower($1)=="github-authentication-token-expiration"{print $2}')
+          if [ -n "$expiry" ]; then
+            at=$(date -u -d "$expiry" +%s 2>/dev/null || echo "")
+            echo "expiry=$expiry" >> "$GITHUB_OUTPUT"
+            [ -n "$at" ] && echo "minutes=$(( (at - MINTED) / 60 ))" >> "$GITHUB_OUTPUT"
+          else
+            echo "expiry=absent" >> "$GITHUB_OUTPUT"
+          fi
+          echo "expiry header: ${expiry:-absent}"
+
+      - name: Use the token at 55 and 61 minutes after the mint
+        id: use
+        if: inputs.wait
+        env:
+          GH_TOKEN: ${{ steps.driver.outputs.token }}
+          MINTED: ${{ steps.before.outputs.at }}
+        run: |
+          try() { gh api -i "repos/$GITHUB_REPOSITORY" 2>/dev/null | head -n1 | awk '{print $2}'; }
+          wait_until() { local t=$(( MINTED + $1 * 60 )); local now; now=$(date -u +%s); [ "$t" -gt "$now" ] && sleep $(( t - now )); return 0; }
+          wait_until 55; at55=$(try); echo "at-55=${at55:-none}" >> "$GITHUB_OUTPUT"; echo "55 min: HTTP ${at55:-none}"
+          wait_until 61; at61=$(try); echo "at-61=${at61:-none}" >> "$GITHUB_OUTPUT"; echo "61 min: HTTP ${at61:-none}"
+
+      - name: Write the answer
+        if: always()
+        env:
+          EXPIRY: ${{ steps.header.outputs.expiry }}
+          MINUTES: ${{ steps.header.outputs.minutes }}
+          AT55: ${{ steps.use.outputs.at-55 }}
+          AT61: ${{ steps.use.outputs.at-61 }}
+          WAITED: ${{ inputs.wait }}
+        run: |
+          answer='**INCONCLUSIVE**'
+          if [ "$WAITED" = true ] && [ -n "$AT55" ]; then
+            if [ "$AT55" = 200 ] && [ "$AT61" = 401 ]; then answer='**PASS**'; else answer='**FAIL**'; fi
+          elif [ -n "$MINUTES" ]; then
+            if [ "$MINUTES" -ge 55 ] && [ "$MINUTES" -le 60 ]; then answer='**PASS** (header only)'; else answer='**FAIL** (header only)'; fi
+          fi
+          {
+            echo "## Probe 03: installation token lifetime"
+            echo
+            echo "| §12 item | Question | Measured | Answer |"
+            echo "|---|---|---|---|"
+            echo "| 3 | Do installation tokens expire after an hour? | expiry header: \`${EXPIRY:-not read}\` (${MINUTES:-?} min after the mint); by use: HTTP ${AT55:-not run} at 55 min, HTTP ${AT61:-not run} at 61 min | $answer |"
+            echo
+            echo "PASS by use means the token worked at 55 minutes and was refused at 61, so its life is between the two."
+          } >> "$GITHUB_STEP_SUMMARY"

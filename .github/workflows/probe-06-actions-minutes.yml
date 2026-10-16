@@ -1,0 +1,48 @@
+# Plan 0012 §12, item 6 (Kanon issue #968): public repositories' Actions minutes are free on
+# the free plan.
+# Reads a finished run's timing (by default the latest finished run of probe-05, which used
+# the most runner time) and compares its billable milliseconds with its running time. Holds no
+# secret and creates nothing. The Owner confirms on the organisation's billing page (probes/README.md).
+name: probe-06 Actions minutes (item 6)
+
+on:
+  workflow_dispatch:
+    inputs:
+      run-id:
+        description: The run to read (default, the latest finished run of probe-05)
+        type: string
+        default: ''
+
+permissions: {}
+
+jobs:
+  probe:
+    name: read a run's billable time
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: read
+    steps:
+      - name: Read the run's timing and write the answer
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ inputs.run-id }}
+        run: |
+          if [ -z "$RUN_ID" ]; then
+            RUN_ID=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/probe-05-concurrent-jobs.yml/runs?status=completed&per_page=1" --jq '.workflow_runs[0].id // empty')
+          fi
+          case "$RUN_ID" in ''|*[!0-9]*) echo "::error::no finished run to read; dispatch probe-05 first or give run-id"; exit 1;; esac
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/timing" > timing.json
+          duration=$(jq '.run_duration_ms // 0' timing.json)
+          billable=$(jq '[.billable // {} | .[] | .total_ms // 0] | add // 0' timing.json)
+          by_os=$(jq -r '[.billable // {} | to_entries[] | "\(.key) \(.value.total_ms // 0) ms in \(.value.jobs // 0) jobs"] | join("; ")' timing.json)
+          if [ "$duration" -gt 0 ] && [ "$billable" -eq 0 ]; then answer='**PASS**'; elif [ "$billable" -gt 0 ]; then answer='**FAIL**'; else answer='**INCONCLUSIVE**'; fi
+          {
+            echo "## Probe 06: Actions minutes"
+            echo
+            echo "| §12 item | Question | Measured | Answer |"
+            echo "|---|---|---|---|"
+            echo "| 6 | Are public repositories' Actions minutes free on the free plan? | run [$RUN_ID]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$RUN_ID): ran $((duration / 1000)) s, billable $billable ms (${by_os:-no billable entries}) | $answer |"
+            echo
+            echo "The Owner confirms on the organisation's billing page: Actions minutes used stay at 0 after the probes' runs (probes/README.md)."
+          } >> "$GITHUB_STEP_SUMMARY"

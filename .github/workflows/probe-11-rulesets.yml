@@ -1,0 +1,96 @@
+# Plan 0012 §12, item 11 (Kanon issue #968): rulesets on the default branch are offered on the
+# free plan for public repositories.
+# Creates e2e-probe-11-<run>-<attempt>, adds an active branch ruleset on its default branch
+# (pull request required, no force push, no deletion), reads it back and reads the rules
+# GitHub applies to the branch, then deletes the repository whatever happened.
+name: probe-11 rulesets on the free plan (item 11)
+
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: probe-11
+  cancel-in-progress: false
+
+env:
+  ORG: kanon-e2e
+
+jobs:
+  probe:
+    name: create a ruleset on the default branch
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: e2e
+    permissions: {}
+    env:
+      REPO_NAME: e2e-probe-11-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - name: Mint the driver's organisation token (Administration write)
+        id: org
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ secrets.DRIVER_APP_ID }}
+          private-key: ${{ secrets.DRIVER_APP_KEY }}
+          owner: kanon-e2e
+          permission-administration: write
+
+      - name: Create the repository and the ruleset, and read both back
+        id: ruleset
+        env:
+          GH_TOKEN: ${{ steps.org.outputs.token }}
+        run: |
+          cd "$RUNNER_TEMP"
+          gh api -X POST "orgs/$ORG/repos" -f name="$REPO_NAME" -F private=false -F auto_init=true \
+            -f description="Kanon e2e probe 11; the run that made it deletes it" --jq .full_name
+          jq -n '{
+            name: "probe-11", target: "branch", enforcement: "active",
+            conditions: {ref_name: {include: ["~DEFAULT_BRANCH"], exclude: []}},
+            rules: [
+              {type: "deletion"}, {type: "non_fast_forward"},
+              {type: "pull_request", parameters: {required_approving_review_count: 1, dismiss_stale_reviews_on_push: false,
+                require_code_owner_review: false, require_last_push_approval: false, required_review_thread_resolution: false}}
+            ]}' > ruleset.json
+          gh api -i -X POST "repos/$ORG/$REPO_NAME/rulesets" --input ruleset.json > create.out 2>/dev/null || true
+          tr -d '\r' < create.out > create.clean
+          status=$(head -n1 create.clean | awk '{print $2}')
+          echo "status=${status:-none}" >> "$GITHUB_OUTPUT"
+          if [ "$status" != 201 ]; then
+            echo "message=$(tail -n1 create.clean | jq -r '.message // empty' 2>/dev/null | cut -c1-200)" >> "$GITHUB_OUTPUT"
+          else
+            echo "enforcement=$(tail -n1 create.clean | jq -r .enforcement)" >> "$GITHUB_OUTPUT"
+          fi
+          applied=$(gh api "repos/$ORG/$REPO_NAME/rules/branches/main" --jq '[.[].type] | unique | join(",")' 2>/dev/null || echo unreadable)
+          echo "applied=$applied" >> "$GITHUB_OUTPUT"
+          echo "ruleset: HTTP ${status:-none}; rules on main: $applied"
+
+      - name: Clean up the repository
+        if: always() && steps.org.outputs.token != ''
+        env:
+          GH_TOKEN: ${{ steps.org.outputs.token }}
+        run: |
+          if gh api "repos/$ORG/$REPO_NAME" >/dev/null 2>&1; then
+            gh api -X DELETE "repos/$ORG/$REPO_NAME"
+            echo "deleted $ORG/$REPO_NAME"
+          else
+            echo "$ORG/$REPO_NAME does not exist; nothing to delete"
+          fi
+
+      - name: Write the answer
+        if: always()
+        env:
+          STATUS: ${{ steps.ruleset.outputs.status }}
+          MESSAGE: ${{ steps.ruleset.outputs.message }}
+          ENFORCEMENT: ${{ steps.ruleset.outputs.enforcement }}
+          APPLIED: ${{ steps.ruleset.outputs.applied }}
+        run: |
+          answer='**FAIL**'
+          if [ "$STATUS" = 201 ] && [ "$ENFORCEMENT" = active ] && printf '%s' "$APPLIED" | grep -q pull_request; then answer='**PASS**'; fi
+          {
+            echo "## Probe 11: rulesets on the free plan"
+            echo
+            echo "| §12 item | Question | Measured | Answer |"
+            echo "|---|---|---|---|"
+            echo "| 11 | Are rulesets on the default branch offered on the free plan for public repositories? | create HTTP ${STATUS:-not run}${MESSAGE:+ (\"$MESSAGE\")}; enforcement ${ENFORCEMENT:-none}; rules GitHub applies to main: ${APPLIED:-not read} | $answer |"
+          } >> "$GITHUB_STEP_SUMMARY"
