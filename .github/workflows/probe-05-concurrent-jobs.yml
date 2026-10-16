@@ -1,0 +1,96 @@
+# Plan 0012 §12, item 5 (Kanon issue #968): the free plan runs 20 jobs at once across the
+# organisation's public repositories.
+# Starts `jobs` matrix jobs that each hold a runner for `seconds`, then reads this run's own
+# job timings and counts the most that ran at once. Holds no secret and creates nothing.
+# Run it while nothing else runs in the organisation: other runs take from the same limit.
+name: probe-05 jobs at once (item 5)
+
+on:
+  workflow_dispatch:
+    inputs:
+      jobs:
+        description: How many jobs to start (21 to 40, so the limit shows)
+        type: number
+        default: 30
+      seconds:
+        description: How long each job holds its runner
+        type: number
+        default: 180
+
+permissions: {}
+
+concurrency:
+  group: probe-05
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    name: build the matrix
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions: {}
+    outputs:
+      entries: ${{ steps.matrix.outputs.entries }}
+    steps:
+      - name: Check the inputs and build the matrix
+        id: matrix
+        env:
+          JOBS: ${{ inputs.jobs }}
+          SECONDS_EACH: ${{ inputs.seconds }}
+        run: |
+          case "$JOBS$SECONDS_EACH" in *[!0-9]*|'') echo "::error::jobs and seconds must be whole numbers"; exit 1;; esac
+          if [ "$JOBS" -lt 21 ] || [ "$JOBS" -gt 40 ]; then echo "::error::jobs must be from 21 to 40"; exit 1; fi
+          if [ "$SECONDS_EACH" -lt 60 ] || [ "$SECONDS_EACH" -gt 600 ]; then echo "::error::seconds must be from 60 to 600"; exit 1; fi
+          echo "entries=$(seq 1 "$JOBS" | jq -cs .)" >> "$GITHUB_OUTPUT"
+
+  hold:
+    name: hold ${{ matrix.n }}
+    needs: plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions: {}
+    strategy:
+      fail-fast: false
+      matrix:
+        n: ${{ fromJSON(needs.plan.outputs.entries) }}
+    steps:
+      - name: Hold the runner
+        env:
+          SECONDS_EACH: ${{ inputs.seconds }}
+        run: sleep "$SECONDS_EACH"
+
+  measure:
+    name: count the jobs that ran at once
+    needs: hold
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: read
+    steps:
+      - name: Read this run's job timings and write the answer
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN: ${{ github.run_id }}
+          ATTEMPT: ${{ github.run_attempt }}
+          JOBS: ${{ inputs.jobs }}
+        run: |
+          gh api --paginate "repos/$GITHUB_REPOSITORY/actions/runs/$RUN/attempts/$ATTEMPT/jobs?per_page=100" \
+            --jq '.jobs[] | select(.name | startswith("hold ")) | select(.started_at and .completed_at) | [.started_at, .completed_at] | @tsv' > spans.tsv
+          ran=$(wc -l < spans.tsv | tr -d ' ')
+          # Sweep: +1 at each start, -1 at each end (an end sorts before a start at the same second).
+          peak=$(while IFS=$'\t' read -r s e; do
+                   echo "$(date -u -d "$s" +%s) 1"; echo "$(date -u -d "$e" +%s) 0"
+                 done < spans.tsv | sort -k1,1n -k2,2n | awk '{ if ($2 == 1) c++; else c--; if (c > m) m = c } END { print m + 0 }')
+          first=$(cut -f1 spans.tsv | sort | head -n1); last=$(cut -f1 spans.tsv | sort | tail -n1)
+          if [ "$peak" -ge 20 ]; then answer='**PASS**'; else answer='**FAIL**'; fi
+          [ "$ran" -lt "$JOBS" ] && answer='**INCONCLUSIVE**'
+          {
+            echo "## Probe 05: jobs at once"
+            echo
+            echo "| §12 item | Question | Measured | Answer |"
+            echo "|---|---|---|---|"
+            echo "| 5 | Does the free plan run 20 jobs at once across the organisation's public repositories? | at most $peak of $JOBS jobs ran at once ($ran finished; starts from $first to $last) | $answer |"
+            echo
+            echo "A peak of exactly 20 with more jobs started means the limit is 20. A peak under 20 while nothing else ran in the organisation means it is lower. The count is a lower bound if another run in the organisation held runners at the same time."
+          } >> "$GITHUB_STEP_SUMMARY"

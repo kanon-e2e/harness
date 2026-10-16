@@ -1,0 +1,175 @@
+# Plan 0012 §12, items 1, 2 and 10 (Kanon issue #968).
+#   1  the driver's installation token creates a public repository, adds a topic, deletes it;
+#   2  a token minted right after creation, scoped to the new repository, reaches it;
+#   10 a deleted repository's name can be reused at once.
+# Creates one repository, e2e-probe-01-<run>-<attempt>, twice, and deletes it each time.
+name: probe-01 repository lifecycle (items 1, 2, 10)
+
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: probe-01
+  cancel-in-progress: false
+
+env:
+  ORG: kanon-e2e
+
+jobs:
+  probe:
+    name: create, reach, tag, delete, reuse the name
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: e2e
+    permissions: {}
+    env:
+      REPO_NAME: e2e-probe-01-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - name: Mint the driver's organisation token (Administration write)
+        id: org
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ secrets.DRIVER_APP_ID }}
+          private-key: ${{ secrets.DRIVER_APP_KEY }}
+          owner: kanon-e2e
+          permission-administration: write
+
+      - name: Item 1, create the public repository
+        id: create
+        env:
+          GH_TOKEN: ${{ steps.org.outputs.token }}
+        run: |
+          cd "$RUNNER_TEMP"
+          gh api -i -X POST "orgs/$ORG/repos" -f name="$REPO_NAME" -F private=false -F auto_init=true \
+            -f description="Kanon e2e probe 01; the run that made it deletes it" > create.out 2>/dev/null || true
+          status=$(head -n1 create.out | awk '{print $2}')
+          echo "status=${status:-none}" >> "$GITHUB_OUTPUT"
+          date -u +%s > created-at
+          echo "create: HTTP ${status:-none}"
+          [ "$status" = 201 ]
+
+      - name: Item 2, mint a token scoped to the new repository at once
+        id: scoped
+        continue-on-error: true
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ secrets.DRIVER_APP_ID }}
+          private-key: ${{ secrets.DRIVER_APP_KEY }}
+          owner: kanon-e2e
+          repositories: ${{ env.REPO_NAME }}
+          permission-metadata: read
+
+      - name: Item 2, read the new repository with the scoped token
+        id: reach
+        env:
+          GH_TOKEN: ${{ steps.scoped.outputs.token }}
+          ORG_TOKEN: ${{ steps.org.outputs.token }}
+          MINT: ${{ steps.scoped.outcome }}
+        run: |
+          cd "$RUNNER_TEMP"
+          now=$(date -u +%s); created=$(cat created-at)
+          echo "mint=$MINT" >> "$GITHUB_OUTPUT"
+          echo "mint-after-seconds=$((now - created))" >> "$GITHUB_OUTPUT"
+          if [ "$MINT" = success ]; then
+            if gh api "repos/$ORG/$REPO_NAME" --jq .full_name >/dev/null 2>&1; then reach=yes; else reach=no; fi
+          else
+            reach=no-token
+          fi
+          echo "reach=$reach" >> "$GITHUB_OUTPUT"
+          # How long until the installation lists the repository (polls up to 120 s).
+          listed=never
+          for _ in $(seq 0 24); do
+            if GH_TOKEN="$ORG_TOKEN" gh api --paginate "installation/repositories?per_page=100" --jq '.repositories[].name' 2>/dev/null | grep -qx "$REPO_NAME"; then
+              listed=$(( $(date -u +%s) - created )); break
+            fi
+            sleep 5
+          done
+          echo "listed-after-seconds=$listed" >> "$GITHUB_OUTPUT"
+          echo "scoped mint: $MINT; reach: $reach; listed after: $listed s"
+
+      - name: Item 1, add the topic and read it back
+        id: topic
+        env:
+          GH_TOKEN: ${{ steps.org.outputs.token }}
+        run: |
+          cd "$RUNNER_TEMP"
+          gh api -i -X PUT "repos/$ORG/$REPO_NAME/topics" -f 'names[]=kanon-e2e-provisioned' > topic.out 2>/dev/null || true
+          status=$(head -n1 topic.out | awk '{print $2}')
+          read_back=$(gh api "repos/$ORG/$REPO_NAME/topics" --jq '.names | join(",")' 2>/dev/null || echo unreadable)
+          echo "status=${status:-none}" >> "$GITHUB_OUTPUT"
+          echo "names=$read_back" >> "$GITHUB_OUTPUT"
+          echo "topic: HTTP ${status:-none}; names: $read_back"
+
+      - name: Item 1, delete the repository
+        id: delete
+        env:
+          GH_TOKEN: ${{ steps.org.outputs.token }}
+        run: |
+          cd "$RUNNER_TEMP"
+          gh api -i -X DELETE "repos/$ORG/$REPO_NAME" > delete.out 2>/dev/null || true
+          status=$(head -n1 delete.out | awk '{print $2}')
+          if gh api "repos/$ORG/$REPO_NAME" >/dev/null 2>&1; then gone=no; else gone=yes; fi
+          echo "status=${status:-none}" >> "$GITHUB_OUTPUT"
+          echo "gone=$gone" >> "$GITHUB_OUTPUT"
+          echo "delete: HTTP ${status:-none}; gone: $gone"
+
+      - name: Item 10, create the same name again at once, then delete it
+        id: reuse
+        if: steps.delete.outputs.gone == 'yes'
+        env:
+          GH_TOKEN: ${{ steps.org.outputs.token }}
+        run: |
+          cd "$RUNNER_TEMP"
+          gh api -i -X POST "orgs/$ORG/repos" -f name="$REPO_NAME" -F private=false > reuse.out 2>/dev/null || true
+          status=$(head -n1 reuse.out | awk '{print $2}')
+          echo "status=${status:-none}" >> "$GITHUB_OUTPUT"
+          if [ "$status" = 422 ]; then
+            echo "message=$(tail -n1 reuse.out | jq -r '[.message, (.errors // [] | map(.message // .code) | join("; "))] | join(": ")' 2>/dev/null | tr -d '\n' | cut -c1-200)" >> "$GITHUB_OUTPUT"
+          fi
+          gh api -X DELETE "repos/$ORG/$REPO_NAME" >/dev/null 2>&1 || true
+          echo "re-create: HTTP ${status:-none}"
+
+      - name: Clean up the repository
+        if: always() && steps.org.outputs.token != ''
+        env:
+          GH_TOKEN: ${{ steps.org.outputs.token }}
+        run: |
+          if gh api "repos/$ORG/$REPO_NAME" >/dev/null 2>&1; then
+            gh api -X DELETE "repos/$ORG/$REPO_NAME"
+            echo "deleted $ORG/$REPO_NAME"
+          else
+            echo "$ORG/$REPO_NAME does not exist; nothing to delete"
+          fi
+
+      - name: Write the answers
+        if: always()
+        env:
+          CREATE: ${{ steps.create.outputs.status }}
+          TOPIC: ${{ steps.topic.outputs.status }}
+          TOPIC_NAMES: ${{ steps.topic.outputs.names }}
+          DELETE: ${{ steps.delete.outputs.status }}
+          GONE: ${{ steps.delete.outputs.gone }}
+          MINT: ${{ steps.reach.outputs.mint }}
+          MINT_AFTER: ${{ steps.reach.outputs.mint-after-seconds }}
+          REACH: ${{ steps.reach.outputs.reach }}
+          LISTED: ${{ steps.reach.outputs.listed-after-seconds }}
+          REUSE: ${{ steps.reuse.outputs.status }}
+          REUSE_MSG: ${{ steps.reuse.outputs.message }}
+        run: |
+          verdict() { if [ "$1" = yes ]; then echo '**PASS**'; else echo '**FAIL**'; fi; }
+          one=no; [ "$CREATE" = 201 ] && [ "$TOPIC" = 200 ] && [ "$TOPIC_NAMES" = kanon-e2e-provisioned ] && [ "$DELETE" = 204 ] && [ "$GONE" = yes ] && one=yes
+          two=no; [ "$MINT" = success ] && [ "$REACH" = yes ] && two=yes
+          ten=no; [ "$REUSE" = 201 ] && ten=yes
+          {
+            echo "## Probe 01: repository lifecycle"
+            echo
+            echo "| §12 item | Question | Measured | Answer |"
+            echo "|---|---|---|---|"
+            echo "| 1 | Does the driver's installation token (Administration write) create a public repository, add a topic, and delete it? | create HTTP ${CREATE:-not run}; topic HTTP ${TOPIC:-not run}, read back \`${TOPIC_NAMES:-none}\`; delete HTTP ${DELETE:-not run}, gone: ${GONE:-unknown} | $(verdict $one) |"
+            echo "| 2 | Does a token minted right after creation, scoped to the new repository, reach it? | scoped mint ${MINT:-not run} ${MINT_AFTER:-?} s after creation; read with it: ${REACH:-not run}; the installation listed the repository after ${LISTED:-?} s | $(verdict $two) |"
+            echo "| 10 | Can a deleted repository's name be reused at once? | re-create after delete: HTTP ${REUSE:-not run}${REUSE_MSG:+ ($REUSE_MSG)} | $(verdict $ten) |"
+            echo
+            echo "Item 10's second half (deleted repositories count against nothing) is not measurable here; probe 04's run shows whether many deletions trip a limit."
+          } >> "$GITHUB_STEP_SUMMARY"

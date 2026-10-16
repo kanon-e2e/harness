@@ -1,0 +1,205 @@
+# Plan 0012 §12, item 9 (Kanon issue #968): which of doctor's checks the driver's installation
+# token, with decision 14's permissions, still leaves `unchecked`.
+# Creates e2e-probe-09-<run>-<attempt>, installs Kanon there with `kanon init --feature full`
+# at `kanon-ref`, pushes what init wrote (if init's ruleset allows the push), runs
+# `kanon doctor --json` with GH_TOKEN set to a driver token scoped to that repository and
+# holding every permission the driver has, and lists the `unchecked` entries. A last job
+# deletes the repository whatever happened.
+# This probe runs Kanon's CLI in a job that holds a driver token (not a key): the repository is
+# throwaway, the token is scoped to it, and the CLI is a release the Owner names.
+name: probe-09 doctor's unchecked checks (item 9)
+
+on:
+  workflow_dispatch:
+    inputs:
+      kanon-ref:
+        description: The Kanon release to install and run (vX.Y.Z or candidate-vX.Y.Z)
+        type: string
+        default: v0.40.2
+      project-owner:
+        description: The project Owner init records
+        type: string
+        default: yedeya
+
+permissions: {}
+
+concurrency:
+  group: probe-09
+  cancel-in-progress: false
+
+env:
+  ORG: kanon-e2e
+  REPO_NAME: e2e-probe-09-${{ github.run_id }}-${{ github.run_attempt }}
+
+jobs:
+  create:
+    name: create the repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    environment: e2e
+    permissions: {}
+    steps:
+      - name: Check the inputs
+        env:
+          KANON_REF: ${{ inputs.kanon-ref }}
+          PROJECT_OWNER: ${{ inputs.project-owner }}
+        run: |
+          printf '%s' "$KANON_REF" | grep -Eq '^(candidate-)?v[0-9]+\.[0-9]+\.[0-9]+$' || { echo "::error::kanon-ref must be vX.Y.Z or candidate-vX.Y.Z"; exit 1; }
+          printf '%s' "$PROJECT_OWNER" | grep -Eq '^[A-Za-z0-9-]{1,39}$' || { echo "::error::project-owner is not a GitHub login"; exit 1; }
+
+      - name: Mint the driver's organisation token (Administration write)
+        id: org
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ secrets.DRIVER_APP_ID }}
+          private-key: ${{ secrets.DRIVER_APP_KEY }}
+          owner: kanon-e2e
+          permission-administration: write
+
+      - name: Create the repository
+        env:
+          GH_TOKEN: ${{ steps.org.outputs.token }}
+        run: |
+          gh api -X POST "orgs/$ORG/repos" -f name="$REPO_NAME" -F private=false -F auto_init=true \
+            -f description="Kanon e2e probe 09; the run that made it deletes it" --jq .full_name
+
+  doctor:
+    name: install Kanon and run doctor with the driver's token
+    needs: create
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    environment: e2e
+    permissions: {}
+    outputs:
+      init-exit: ${{ steps.init.outputs.exit }}
+      pushed: ${{ steps.push.outputs.pushed }}
+      doctor-exit: ${{ steps.doctor.outputs.exit }}
+      unchecked-count: ${{ steps.doctor.outputs.count }}
+    steps:
+      - name: Mint the driver's token, scoped to the repository, with all its permissions
+        id: driver
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ secrets.DRIVER_APP_ID }}
+          private-key: ${{ secrets.DRIVER_APP_KEY }}
+          owner: kanon-e2e
+          repositories: ${{ env.REPO_NAME }}
+
+      - name: Set up Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+
+      - name: Clone the repository
+        env:
+          GH_TOKEN: ${{ steps.driver.outputs.token }}
+        run: |
+          gh auth setup-git
+          git clone "https://github.com/$ORG/$REPO_NAME.git" "$RUNNER_TEMP/repo"
+          git -C "$RUNNER_TEMP/repo" config user.name "kanon-e2e-driver[bot]"
+          git -C "$RUNNER_TEMP/repo" config user.email "kanon-e2e-driver[bot]@users.noreply.github.com"
+
+      - name: Install Kanon with init
+        id: init
+        working-directory: ${{ runner.temp }}/repo
+        env:
+          GH_TOKEN: ${{ steps.driver.outputs.token }}
+          KANON_REF: ${{ inputs.kanon-ref }}
+          PROJECT_OWNER: ${{ inputs.project-owner }}
+        run: |
+          set +e
+          npx --yes --package "github:yedeya-labs/kanon#$KANON_REF" kanon init --json --feature full \
+            --claude-auth subscription --consent no --no-sensitive-data --chat none \
+            --project-owner "$PROJECT_OWNER" > "$RUNNER_TEMP/init.json" 2> "$RUNNER_TEMP/init.log"
+          code=$?
+          echo "exit=$code" >> "$GITHUB_OUTPUT"
+          echo "init exited $code"
+          tail -n 40 "$RUNNER_TEMP/init.log"
+
+      - name: Commit and push what init wrote
+        id: push
+        working-directory: ${{ runner.temp }}/repo
+        env:
+          GH_TOKEN: ${{ steps.driver.outputs.token }}
+        run: |
+          git add -A
+          if git diff --cached --quiet; then echo "pushed=nothing-to-push" >> "$GITHUB_OUTPUT"; exit 0; fi
+          git commit -q -m "Install Kanon (probe 09)"
+          if git push -q origin HEAD:main 2> push.err; then echo "pushed=yes" >> "$GITHUB_OUTPUT"
+          else echo "pushed=refused" >> "$GITHUB_OUTPUT"; sed 's/^/push: /' push.err | head -n 10; fi
+          rm -f push.err
+
+      - name: Run doctor
+        id: doctor
+        working-directory: ${{ runner.temp }}/repo
+        env:
+          GH_TOKEN: ${{ steps.driver.outputs.token }}
+          KANON_REF: ${{ inputs.kanon-ref }}
+        run: |
+          set +e
+          npx --yes --package "github:yedeya-labs/kanon#$KANON_REF" kanon doctor --json > "$RUNNER_TEMP/doctor.json" 2> "$RUNNER_TEMP/doctor.log"
+          code=$?
+          set -e
+          echo "exit=$code" >> "$GITHUB_OUTPUT"
+          if jq -e . "$RUNNER_TEMP/doctor.json" >/dev/null 2>&1; then
+            echo "count=$(jq '.unchecked | length' "$RUNNER_TEMP/doctor.json")" >> "$GITHUB_OUTPUT"
+          else
+            echo "count=unreadable" >> "$GITHUB_OUTPUT"; tail -n 20 "$RUNNER_TEMP/doctor.log"
+          fi
+          echo "doctor exited $code"
+
+      - name: Write the unchecked checks
+        if: always()
+        env:
+          INIT_EXIT: ${{ steps.init.outputs.exit }}
+          PUSHED: ${{ steps.push.outputs.pushed }}
+          DOCTOR_EXIT: ${{ steps.doctor.outputs.exit }}
+          COUNT: ${{ steps.doctor.outputs.count }}
+          KANON_REF: ${{ inputs.kanon-ref }}
+        run: |
+          case "$DOCTOR_EXIT" in 0|1|4) ran=yes;; *) ran=no;; esac
+          if [ "$ran" = yes ] && [ "$COUNT" != unreadable ]; then answer='**MEASURED**'; else answer='**INCONCLUSIVE**: doctor did not run to the end'; fi
+          {
+            echo "## Probe 09: doctor's unchecked checks with the driver's token"
+            echo
+            echo "| §12 item | Question | Measured | Answer |"
+            echo "|---|---|---|---|"
+            echo "| 9 | With the driver's token and decision 14's permissions, which of doctor's checks are still \`unchecked\`? | Kanon $KANON_REF; init exit ${INIT_EXIT:-not run}; push ${PUSHED:-not run}; doctor exit ${DOCTOR_EXIT:-not run}; ${COUNT:-no} unchecked | $answer |"
+            echo
+            if [ "$ran" = yes ] && [ "$COUNT" != unreadable ]; then
+              echo "| Check | Subject | Why doctor could not run it |"
+              echo "|---|---|---|"
+              jq -r '.unchecked[] | "| `\(.check)` | `\(.subject)` | \(.reason | gsub("\\|"; "/") | gsub("\n"; " ")) |"' "$RUNNER_TEMP/doctor.json"
+              echo
+              echo "Findings by id (not the question, for context): $(jq -r '[.findings[]?.id] | group_by(.) | map("\(.[0]) ×\(length)") | join(", ")' "$RUNNER_TEMP/doctor.json")"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  cleanup:
+    name: delete the repository
+    needs: [create, doctor]
+    if: ${{ always() && needs.create.result != 'skipped' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    environment: e2e
+    permissions: {}
+    steps:
+      - name: Mint the driver's organisation token (Administration write)
+        id: org
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ secrets.DRIVER_APP_ID }}
+          private-key: ${{ secrets.DRIVER_APP_KEY }}
+          owner: kanon-e2e
+          permission-administration: write
+
+      - name: Delete the repository
+        env:
+          GH_TOKEN: ${{ steps.org.outputs.token }}
+        run: |
+          if gh api "repos/$ORG/$REPO_NAME" >/dev/null 2>&1; then
+            gh api -X DELETE "repos/$ORG/$REPO_NAME"
+            echo "deleted $ORG/$REPO_NAME"
+          else
+            echo "$ORG/$REPO_NAME does not exist; nothing to delete"
+          fi

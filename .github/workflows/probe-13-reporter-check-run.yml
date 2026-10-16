@@ -1,0 +1,121 @@
+# Plan 0012 §12, item 13 (Kanon issue #968): the Reporter, a private App owned by yedeya-labs
+# and installed only on Kanon, creates a check run on a Kanon commit from a token minted in
+# this organisation's workflow, `in_progress`, and completes it later; the check run's
+# `app.id` is the Reporter's, and `check-runs?app_id=` filters by it.
+# Writes one check run, `kanon-e2e-probe`, on the Kanon commit `sha`: `start` creates it
+# in_progress, `finish` (a second job, with a mint of its own) completes it `neutral`, and
+# reads it back through the app_id filter. A check run can't be deleted; `neutral` under its
+# own name is how it stays out of every gate. `finish` runs whenever `start` created one, so
+# none is left in_progress.
+name: probe-13 Reporter check run on Kanon (item 13)
+
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: A commit of yedeya-labs/kanon (40 hex characters), for example an old commit on main
+        type: string
+        required: true
+
+permissions: {}
+
+concurrency:
+  group: probe-13
+  cancel-in-progress: false
+
+env:
+  KANON: yedeya-labs/kanon
+  CHECK_NAME: kanon-e2e-probe
+
+jobs:
+  start:
+    name: create the check run in_progress
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    environment: e2e-report
+    permissions: {}
+    outputs:
+      id: ${{ steps.create.outputs.id }}
+      status: ${{ steps.create.outputs.status }}
+    steps:
+      - name: Check the commit
+        env:
+          SHA: ${{ inputs.sha }}
+        run: printf '%s' "$SHA" | grep -Eq '^[0-9a-f]{40}$' || { echo "::error::sha must be a full 40-character commit id"; exit 1; }
+
+      - name: Mint the Reporter's token for Kanon (Checks write)
+        id: reporter
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ secrets.REPORTER_APP_ID }}
+          private-key: ${{ secrets.REPORTER_APP_KEY }}
+          owner: yedeya-labs
+          repositories: kanon
+          permission-checks: write
+
+      - name: Create the check run
+        id: create
+        env:
+          GH_TOKEN: ${{ steps.reporter.outputs.token }}
+          SHA: ${{ inputs.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          gh api -X POST "repos/$KANON/check-runs" -f name="$CHECK_NAME" -f head_sha="$SHA" -f status=in_progress \
+            -f external_id="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" -f details_url="$RUN_URL" \
+            -f 'output[title]=Kanon e2e probe 13' \
+            -f "output[summary]=A platform probe from the test organisation's harness ($RUN_URL). It completes neutral and gates nothing." \
+            --jq '[.id, .status] | @tsv' > created.tsv
+          IFS=$'\t' read -r id status < created.tsv
+          echo "id=$id" >> "$GITHUB_OUTPUT"; echo "status=$status" >> "$GITHUB_OUTPUT"
+          echo "created check run $id ($status)"
+
+  finish:
+    name: complete the check run and read it back
+    needs: start
+    if: ${{ always() && needs.start.outputs.id != '' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    environment: e2e-report
+    permissions: {}
+    steps:
+      - name: Mint the Reporter's token for Kanon again (Checks write)
+        id: reporter
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ secrets.REPORTER_APP_ID }}
+          private-key: ${{ secrets.REPORTER_APP_KEY }}
+          owner: yedeya-labs
+          repositories: kanon
+          permission-checks: write
+
+      - name: Complete it, read it back, and write the answer
+        env:
+          GH_TOKEN: ${{ steps.reporter.outputs.token }}
+          SHA: ${{ inputs.sha }}
+          ID: ${{ needs.start.outputs.id }}
+          CREATED_STATUS: ${{ needs.start.outputs.status }}
+          REPORTER_APP_ID: ${{ secrets.REPORTER_APP_ID }}
+        run: |
+          completed=$(gh api -X PATCH "repos/$KANON/check-runs/$ID" -f status=completed -f conclusion=neutral \
+            -f 'output[title]=Kanon e2e probe 13' -f 'output[summary]=Completed by a second job with a fresh mint. It gates nothing.' \
+            --jq '.status + "/" + (.conclusion // "none")' 2>/dev/null || echo failed)
+          # The app_id filter, as the gate will read it. The App id is a secret here, so the
+          # summary says whether it matched rather than printing it.
+          gh api "repos/$KANON/commits/$SHA/check-runs?app_id=$REPORTER_APP_ID&check_name=$CHECK_NAME&filter=all&per_page=100" \
+            > listed.json 2>/dev/null || echo '{}' > listed.json
+          jq -r --arg id "$ID" '.check_runs[]? | select((.id | tostring) == $id) | [.status, (.conclusion // "none"), (.app.id | tostring)] | @tsv' listed.json > found.tsv || true
+          if [ -s found.tsv ]; then
+            IFS=$'\t' read -r status conclusion app < found.tsv
+            filtered=yes; [ "$app" = "$REPORTER_APP_ID" ] && own_app=yes || own_app=no
+          else
+            filtered=no; own_app=unknown; status=""; conclusion=""
+          fi
+          answer='**FAIL**'
+          if [ "$CREATED_STATUS" = in_progress ] && [ "$completed" = completed/neutral ] && [ "$filtered" = yes ] && [ "$own_app" = yes ]; then answer='**PASS**'; fi
+          {
+            echo "## Probe 13: the Reporter's check run on a Kanon commit"
+            echo
+            echo "| §12 item | Question | Measured | Answer |"
+            echo "|---|---|---|---|"
+            echo "| 13 | Can the Reporter, minted in this organisation's workflow, create a check run on a Kanon commit in_progress, complete it later, under its own App id, found by \`check-runs?app_id=\`? | check run $ID on \`$SHA\`: created ${CREATED_STATUS:-?}; completed by a second job: $completed; found by the app_id filter: $filtered (${status:-?}/${conclusion:-?}); its app.id is the Reporter's: $own_app | $answer |"
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,66 @@
+# Called by probe-12-env-in-called-workflow.yml (plan 0012 §12, item 12; Kanon issue #968).
+# One job, which declares the environment `e2e` itself and reads the driver's id and key from
+# it. It prints neither: it reports only whether each is non-empty, and whether a mint with
+# them succeeded (a read-only token scoped to this repository, revoked when the job ends).
+name: probe-12 environment in a called workflow, the called job
+
+on:
+  workflow_call:
+    outputs:
+      id-present:
+        description: yes when the environment's DRIVER_APP_ID was readable
+        value: ${{ jobs.read.outputs.id-present }}
+      key-present:
+        description: yes when the environment's DRIVER_APP_KEY was readable
+        value: ${{ jobs.read.outputs.key-present }}
+      minted:
+        description: yes when a mint with them succeeded
+        value: ${{ jobs.read.outputs.minted }}
+
+permissions: {}
+
+jobs:
+  read:
+    name: read the e2e environment's secrets
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    environment: e2e
+    permissions: {}
+    outputs:
+      id-present: ${{ steps.present.outputs.id }}
+      key-present: ${{ steps.present.outputs.key }}
+      minted: ${{ steps.use.outputs.minted }}
+    steps:
+      - name: Check the secrets are there, without printing them
+        id: present
+        env:
+          HAS_ID: ${{ secrets.DRIVER_APP_ID != '' }}
+          HAS_KEY: ${{ secrets.DRIVER_APP_KEY != '' }}
+        run: |
+          [ "$HAS_ID" = true ] && echo "id=yes" >> "$GITHUB_OUTPUT" || echo "id=no" >> "$GITHUB_OUTPUT"
+          [ "$HAS_KEY" = true ] && echo "key=yes" >> "$GITHUB_OUTPUT" || echo "key=no" >> "$GITHUB_OUTPUT"
+          echo "id present: $HAS_ID; key present: $HAS_KEY"
+
+      - name: Mint a read-only token with them
+        id: mint
+        if: steps.present.outputs.id == 'yes' && steps.present.outputs.key == 'yes'
+        continue-on-error: true
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ secrets.DRIVER_APP_ID }}
+          private-key: ${{ secrets.DRIVER_APP_KEY }}
+          owner: kanon-e2e
+          repositories: harness
+          permission-metadata: read
+
+      - name: Use the token once
+        id: use
+        if: always()
+        env:
+          GH_TOKEN: ${{ steps.mint.outputs.token }}
+        run: |
+          if [ -n "$GH_TOKEN" ] && gh api "repos/$GITHUB_REPOSITORY" --jq .full_name >/dev/null 2>&1; then
+            echo "minted=yes" >> "$GITHUB_OUTPUT"; echo "the mint worked"
+          else
+            echo "minted=no" >> "$GITHUB_OUTPUT"; echo "no working token"
+          fi

@@ -1,0 +1,295 @@
+# Plan 0012 §12, item 14 (Kanon issue #968): a token with Administration (write) and no
+# Workflows or Contents write can't change a workflow file in that repository by any route
+# (a deploy key it adds, a collaborator it invites, a ruleset bypass it grants).
+# Creates e2e-probe-14-<run>-<attempt> holding .github/workflows/probe.yml, and a branch
+# `probe-alt` whose copy of that file differs. Then mints the `kanon` job's token from plan
+# §5.2 (that repository only; Administration write, Issues write, Contents read, Actions read,
+# Pull requests read; no Workflows, no Secrets) and tries each route with it:
+#   1 contents API     write the file directly (the baseline);
+#   2 git over HTTPS   push a change with the token;
+#   3 deploy key       add a write deploy key, then push a change over SSH with it;
+#   4 collaborator     invite `collaborator` with admin, who could then push as a person;
+#   5 ruleset bypass   add a ruleset that lets the driver App bypass, then write the file;
+#   6 default branch   make `probe-alt` the default branch, so its copy is the one that runs.
+# After each route the file on `main` (and on the default branch) is compared with the original
+# by blob SHA, and the route is reverted with a setup token. An always() step deletes the
+# repository. Neither token is printed; the HTTPS header derived from the token is masked.
+name: probe-14 Administration-write routes to a workflow change (item 14)
+
+on:
+  workflow_dispatch:
+    inputs:
+      collaborator:
+        description: The login route 4 invites (the invitation is withdrawn at once)
+        type: string
+        default: yedeya
+
+permissions: {}
+
+concurrency:
+  group: probe-14
+  cancel-in-progress: false
+
+env:
+  ORG: kanon-e2e
+  WF: .github/workflows/probe.yml
+
+jobs:
+  probe:
+    name: try each route, and revert it
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment: e2e
+    permissions: {}
+    env:
+      REPO_NAME: e2e-probe-14-${{ github.run_id }}-${{ github.run_attempt }}
+      COLLABORATOR: ${{ inputs.collaborator }}
+    steps:
+      - name: Check the inputs
+        run: printf '%s' "$COLLABORATOR" | grep -Eq '^[A-Za-z0-9-]{1,39}$' || { echo "::error::collaborator is not a GitHub login"; exit 1; }
+
+      - name: Mint the setup token (Administration, Contents and Workflows write)
+        id: setup
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ secrets.DRIVER_APP_ID }}
+          private-key: ${{ secrets.DRIVER_APP_KEY }}
+          owner: kanon-e2e
+          permission-administration: write
+          permission-contents: write
+          permission-workflows: write
+
+      - name: Create the repository, its workflow and the probe-alt branch
+        env:
+          SETUP_TOKEN: ${{ steps.setup.outputs.token }}
+          GH_TOKEN: ${{ steps.setup.outputs.token }}
+        run: |
+          cd "$RUNNER_TEMP"
+          cat > lib.sh <<'LIB'
+          # Shared by the route steps. SETUP_TOKEN is the setup token; nothing here prints a token.
+          status_of() { # gh api args... -> prints the HTTP status; the body goes to $RUNNER_TEMP/last.json
+            local out; out=$(mktemp)
+            gh api -i "$@" > "$out" 2>/dev/null || true
+            tr -d '\r' < "$out" | head -n1 | awk '{print $2}'
+            tr -d '\r' < "$out" | awk 'body{print} /^$/{body=1}' > "$RUNNER_TEMP/last.json"
+            rm -f "$out"
+          }
+          wf_sha() { # [ref] -> the workflow file's blob SHA there (default branch with no ref)
+            GH_TOKEN="$SETUP_TOKEN" gh api "repos/$ORG/$REPO_NAME/contents/$WF${1:+?ref=$1}" --jq .sha 2>/dev/null || echo unreadable
+          }
+          changed() { # -> yes when main's or the default branch's file is not the original
+            if [ "$(wf_sha main)" = "$ORIG_SHA" ] && [ "$(wf_sha)" = "$ORIG_SHA" ]; then echo no; else echo yes; fi
+          }
+          restore_main() { # puts the original file back on main; prints yes when it is the original
+            local now; now=$(wf_sha main)
+            if [ "$now" != "$ORIG_SHA" ] && [ "$now" != unreadable ]; then
+              GH_TOKEN="$SETUP_TOKEN" gh api -X PUT "repos/$ORG/$REPO_NAME/contents/$WF" -f branch=main -f sha="$now" \
+                -f message="Restore the probe's workflow" -f content="$(base64 -w0 "$RUNNER_TEMP/probe.yml")" >/dev/null 2>&1 || true
+            fi
+            [ "$(wf_sha main)" = "$ORIG_SHA" ] && echo yes || echo no
+          }
+          record() { # route, the token's call, changed, reverted
+            printf '%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "$4" >> "$RUNNER_TEMP/routes.tsv"
+            echo "route $1: $2; changed: $3; reverted: $4"
+          }
+          changed_copy() { # route -> a changed copy of the workflow file, as base64
+            { cat "$RUNNER_TEMP/probe.yml"; echo "# changed by route $1"; } | base64 -w0
+          }
+          LIB
+          printf '%s\n' 'name: probe' 'on:' '  workflow_dispatch:' 'permissions: {}' 'jobs:' '  probe:' \
+            '    runs-on: ubuntu-24.04' '    steps:' '      - run: echo "the original workflow"' > probe.yml
+          : > routes.tsv
+          gh api -X POST "orgs/$ORG/repos" -f name="$REPO_NAME" -F private=false -F auto_init=true \
+            -f description="Kanon e2e probe 14; the run that made it deletes it" --jq .full_name
+          orig=$(gh api -X PUT "repos/$ORG/$REPO_NAME/contents/$WF" -f message="Add the probe's workflow" \
+            -f content="$(base64 -w0 probe.yml)" --jq .content.sha)
+          echo "ORIG_SHA=$orig" >> "$GITHUB_ENV"
+          head=$(gh api "repos/$ORG/$REPO_NAME/git/ref/heads/main" --jq .object.sha)
+          gh api -X POST "repos/$ORG/$REPO_NAME/git/refs" -f ref=refs/heads/probe-alt -f sha="$head" --jq .ref
+          { cat probe.yml; echo "# the probe-alt branch's copy"; } > alt.yml
+          gh api -X PUT "repos/$ORG/$REPO_NAME/contents/$WF" -f branch=probe-alt -f sha="$orig" \
+            -f message="Change the workflow on probe-alt" -f content="$(base64 -w0 alt.yml)" --jq .content.sha
+          echo "original workflow blob: $orig"
+
+      - name: Mint the kanon job's token (no Workflows, no Contents write)
+        id: narrow1
+        continue-on-error: true
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ secrets.DRIVER_APP_ID }}
+          private-key: ${{ secrets.DRIVER_APP_KEY }}
+          owner: kanon-e2e
+          repositories: ${{ env.REPO_NAME }}
+          permission-administration: write
+          permission-issues: write
+          permission-contents: read
+          permission-actions: read
+          permission-pull-requests: read
+
+      - name: Wait for the installation to reach the repository
+        if: steps.narrow1.outcome == 'failure'
+        run: sleep 30
+
+      - name: Mint the kanon job's token again
+        id: narrow2
+        if: steps.narrow1.outcome == 'failure'
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ secrets.DRIVER_APP_ID }}
+          private-key: ${{ secrets.DRIVER_APP_KEY }}
+          owner: kanon-e2e
+          repositories: ${{ env.REPO_NAME }}
+          permission-administration: write
+          permission-issues: write
+          permission-contents: read
+          permission-actions: read
+          permission-pull-requests: read
+
+      - name: Route 1, the contents API
+        continue-on-error: true
+        env:
+          SETUP_TOKEN: ${{ steps.setup.outputs.token }}
+          GH_TOKEN: ${{ steps.narrow1.outputs.token || steps.narrow2.outputs.token }}
+        run: |
+          . "$RUNNER_TEMP/lib.sh"
+          s=$(status_of -X PUT "repos/$ORG/$REPO_NAME/contents/$WF" -f branch=main -f sha="$ORIG_SHA" \
+            -f message="route 1" -f content="$(changed_copy contents-api)")
+          c=$(changed); r=$(restore_main)
+          record "1 contents API" "write HTTP ${s:-none}" "$c" "$r"
+
+      - name: Route 2, git push over HTTPS
+        continue-on-error: true
+        env:
+          SETUP_TOKEN: ${{ steps.setup.outputs.token }}
+          NARROW_TOKEN: ${{ steps.narrow1.outputs.token || steps.narrow2.outputs.token }}
+        run: |
+          . "$RUNNER_TEMP/lib.sh"
+          header=$(printf 'x-access-token:%s' "$NARROW_TOKEN" | base64 -w0)
+          echo "::add-mask::$header"
+          work=$(mktemp -d)
+          git clone -q "https://github.com/$ORG/$REPO_NAME.git" "$work"
+          echo "# changed by route git-https" >> "$work/$WF"
+          git -C "$work" -c user.name=probe-14 -c user.email=probe-14@users.noreply.github.com commit -qam "route 2"
+          if git -C "$work" -c http.extraheader="AUTHORIZATION: basic $header" push -q origin HEAD:main 2>/dev/null; then call="push accepted"; else call="push refused"; fi
+          rm -rf "$work"
+          c=$(changed); r=$(restore_main)
+          record "2 git over HTTPS" "$call" "$c" "$r"
+
+      - name: Route 3, a write deploy key
+        continue-on-error: true
+        env:
+          SETUP_TOKEN: ${{ steps.setup.outputs.token }}
+          GH_TOKEN: ${{ steps.narrow1.outputs.token || steps.narrow2.outputs.token }}
+        run: |
+          . "$RUNNER_TEMP/lib.sh"
+          keydir=$(mktemp -d); chmod 700 "$keydir"
+          ssh-keygen -q -t ed25519 -N '' -C probe-14 -f "$keydir/key"
+          gh api meta --jq '.ssh_keys[] | "github.com " + .' > "$keydir/known_hosts"
+          s=$(status_of -X POST "repos/$ORG/$REPO_NAME/keys" -f title=probe-14 -f key="$(cat "$keydir/key.pub")" -F read_only=false)
+          key_id=$(jq -r '.id // empty' "$RUNNER_TEMP/last.json" 2>/dev/null)
+          call="add key HTTP ${s:-none}"
+          if [ "$s" = 201 ]; then
+            work=$(mktemp -d)
+            export GIT_SSH_COMMAND="ssh -i $keydir/key -o IdentitiesOnly=yes -o UserKnownHostsFile=$keydir/known_hosts"
+            if git clone -q "git@github.com:$ORG/$REPO_NAME.git" "$work" 2>/dev/null; then
+              echo "# changed by route deploy-key" >> "$work/$WF"
+              git -C "$work" -c user.name=probe-14 -c user.email=probe-14@users.noreply.github.com commit -qam "route 3"
+              if git -C "$work" push -q origin HEAD:main 2>/dev/null; then call="$call; push accepted"; else call="$call; push refused"; fi
+            else
+              call="$call; clone refused"
+            fi
+            rm -rf "$work"
+          fi
+          c=$(changed); r=$(restore_main)
+          if [ -n "$key_id" ]; then GH_TOKEN="$SETUP_TOKEN" gh api -X DELETE "repos/$ORG/$REPO_NAME/keys/$key_id" >/dev/null 2>&1 || r="$r, key not removed"; fi
+          rm -rf "$keydir"
+          record "3 deploy key" "$call" "$c" "$r"
+
+      - name: Route 4, invite a collaborator with admin
+        continue-on-error: true
+        env:
+          SETUP_TOKEN: ${{ steps.setup.outputs.token }}
+          GH_TOKEN: ${{ steps.narrow1.outputs.token || steps.narrow2.outputs.token }}
+        run: |
+          . "$RUNNER_TEMP/lib.sh"
+          s=$(status_of -X PUT "repos/$ORG/$REPO_NAME/collaborators/$COLLABORATOR" -f permission=admin)
+          invitation=$(jq -r '.id // empty' "$RUNNER_TEMP/last.json" 2>/dev/null)
+          r=yes
+          case "$s" in
+            201) GH_TOKEN="$SETUP_TOKEN" gh api -X DELETE "repos/$ORG/$REPO_NAME/invitations/$invitation" >/dev/null 2>&1 || r=no
+                 call="invitation created (HTTP 201)";;
+            204) GH_TOKEN="$SETUP_TOKEN" gh api -X DELETE "repos/$ORG/$REPO_NAME/collaborators/$COLLABORATOR" >/dev/null 2>&1 || r=no
+                 call="access granted, or the login already had it (HTTP 204)";;
+            *)   call="refused (HTTP ${s:-none})";;
+          esac
+          record "4 collaborator" "$call" "$(changed)" "$r"
+
+      - name: Route 5, a ruleset that lets the driver bypass
+        continue-on-error: true
+        env:
+          SETUP_TOKEN: ${{ steps.setup.outputs.token }}
+          GH_TOKEN: ${{ steps.narrow1.outputs.token || steps.narrow2.outputs.token }}
+          DRIVER_APP_ID: ${{ secrets.DRIVER_APP_ID }}
+        run: |
+          . "$RUNNER_TEMP/lib.sh"
+          jq -n --argjson app "$DRIVER_APP_ID" '{
+            name: "probe-14", target: "branch", enforcement: "active",
+            bypass_actors: [{actor_id: $app, actor_type: "Integration", bypass_mode: "always"}],
+            conditions: {ref_name: {include: ["~DEFAULT_BRANCH"], exclude: []}},
+            rules: [{type: "non_fast_forward"}]}' > "$RUNNER_TEMP/ruleset.json"
+          s=$(status_of -X POST "repos/$ORG/$REPO_NAME/rulesets" --input "$RUNNER_TEMP/ruleset.json")
+          ruleset=$(jq -r '.id // empty' "$RUNNER_TEMP/last.json" 2>/dev/null)
+          w=$(status_of -X PUT "repos/$ORG/$REPO_NAME/contents/$WF" -f branch=main -f sha="$ORIG_SHA" \
+            -f message="route 5" -f content="$(changed_copy ruleset-bypass)")
+          c=$(changed); r=$(restore_main)
+          if [ -n "$ruleset" ]; then GH_TOKEN="$SETUP_TOKEN" gh api -X DELETE "repos/$ORG/$REPO_NAME/rulesets/$ruleset" >/dev/null 2>&1 || r="$r, ruleset not removed"; fi
+          record "5 ruleset bypass" "ruleset HTTP ${s:-none}; then write HTTP ${w:-none}" "$c" "$r"
+
+      - name: Route 6, switch the default branch
+        continue-on-error: true
+        env:
+          SETUP_TOKEN: ${{ steps.setup.outputs.token }}
+          GH_TOKEN: ${{ steps.narrow1.outputs.token || steps.narrow2.outputs.token }}
+        run: |
+          . "$RUNNER_TEMP/lib.sh"
+          s=$(status_of -X PATCH "repos/$ORG/$REPO_NAME" -f default_branch=probe-alt)
+          c=$(changed)
+          GH_TOKEN="$SETUP_TOKEN" gh api -X PATCH "repos/$ORG/$REPO_NAME" -f default_branch=main >/dev/null 2>&1 || true
+          now=$(GH_TOKEN="$SETUP_TOKEN" gh api "repos/$ORG/$REPO_NAME" --jq .default_branch 2>/dev/null)
+          [ "$now" = main ] && r=yes || r=no
+          record "6 default branch" "switch to probe-alt HTTP ${s:-none}" "$c" "$r"
+
+      - name: Clean up the repository
+        if: always() && steps.setup.outputs.token != ''
+        env:
+          GH_TOKEN: ${{ steps.setup.outputs.token }}
+        run: |
+          if gh api "repos/$ORG/$REPO_NAME" >/dev/null 2>&1; then
+            gh api -X DELETE "repos/$ORG/$REPO_NAME"
+            echo "deleted $ORG/$REPO_NAME"
+          else
+            echo "$ORG/$REPO_NAME does not exist; nothing to delete"
+          fi
+
+      - name: Write the answer
+        if: always()
+        run: |
+          rows="$RUNNER_TEMP/routes.tsv"
+          tried=$( [ -f "$rows" ] && wc -l < "$rows" | tr -d ' ' || echo 0)
+          open=$( [ -f "$rows" ] && awk -F'\t' '$3 == "yes" || $2 ~ /^(invitation created|access granted)/ {print $1}' "$rows" | paste -sd ';' - || true)
+          if [ "$tried" -lt 6 ]; then answer='**INCONCLUSIVE**: not every route ran'
+          elif [ -n "$open" ]; then answer="**FAIL**: open by $open"
+          else answer='**PASS**'; fi
+          {
+            echo "## Probe 14: Administration-write routes to a workflow change"
+            echo
+            echo "| §12 item | Question | Measured | Answer |"
+            echo "|---|---|---|---|"
+            echo "| 14 | Can a token with Administration (write) and no Workflows or Contents write change a workflow file by any route? | $tried of 6 routes tried with the \`kanon\` job's token (below) | $answer |"
+            echo
+            echo "| Route | The token's call | Workflow file changed | Reverted |"
+            echo "|---|---|---|---|"
+            [ -f "$rows" ] && awk -F'\t' '{printf "| %s | %s | %s | %s |\n", $1, $2, $3, $4}' "$rows"
+            echo
+            echo "Route 4 changes no file by itself: an accepted invitation hands a person admin, who can then change any workflow, so an accepted call counts as an open route. Route 6 counts as a change because the default branch's copy is the one its events run."
+          } >> "$GITHUB_STEP_SUMMARY"
