@@ -1,6 +1,6 @@
 # E0's platform probes
 
-Kanon's plan 0012 ("end-to-end tests in throwaway repositories, and a release gate on them") rests on seventeen platform assumptions. Its §12 lists them, and Kanon issue #968 asks for each to be measured here, in the test organisation, before the runner is built. The workflows in `.github/workflows/probe-*.yml` measure the ones a workflow can. This file lists every item, with each probe's dispatch command, and the steps a person takes for the rest.
+Kanon's plan 0012 ("end-to-end tests in throwaway repositories, and a release gate on them") rests on eighteen platform assumptions. Its §12 lists them, and Kanon issue #968 asks for each to be measured here, in the test organisation, before the runner is built. The workflows in `.github/workflows/probe-*.yml` measure the ones a workflow can. This file lists every item, with each probe's dispatch command, and the steps a person takes for the rest.
 
 ## The rules every probe keeps
 
@@ -18,7 +18,7 @@ Dispatch every command from a checkout with a token that may dispatch workflows 
 |---|---|---|---|---|---|
 | 1 | The driver's token creates a public repository, adds a topic, deletes it | `gh workflow run probe-01-repo-lifecycle.yml -R kanon-e2e/harness` (answers 1, 2 and 10) | none | 1 repository, made twice, deleted twice | about 3 minutes |
 | 2 | A token minted right after creation, scoped to the new repository, reaches it | probe 01 | none | (probe 01's) | (probe 01's) |
-| 3 | Installation tokens expire after an hour | `gh workflow run probe-03-token-lifetime.yml -R kanon-e2e/harness` (`-f wait=false` reads the expiry header only) | none | nothing | about 62 minutes; 1 with `wait=false` |
+| 3 | Installation tokens expire after an hour | `gh workflow run probe-03-token-lifetime.yml -R kanon-e2e/harness` (`-f wait=false` reads the expiry header only, which GitHub doesn't send, so that run answers INCONCLUSIVE; run it with the wait) | none | nothing | about 62 minutes; 1 with `wait=false` |
 | 4 | Repository creation's secondary rate limit is well above 40 to 80 an hour | `gh workflow run probe-04-repo-rate-limit.yml -R kanon-e2e/harness -f max-repos=20`, then, if 20 pass, `-f max-repos=80` | Run it while no other probe creates repositories | up to `max-repos` repositories (cap 80), all deleted | 3 to 15 minutes |
 | 5 | The free plan runs 20 jobs at once across the organisation | `gh workflow run probe-05-concurrent-jobs.yml -R kanon-e2e/harness` (`-f jobs=30 -f seconds=180`) | Run it while nothing else runs in the organisation | nothing | about 105 runner minutes, 8 minutes' wait |
 | 6 | Public repositories' Actions minutes are free | `gh workflow run probe-06-actions-minutes.yml -R kanon-e2e/harness` after probe 05 (or `-f run-id=<id>`) | The Owner opens the organisation's **Settings → Billing and licensing → Usage**, filters on Actions, and records that the minutes charged stay at 0 after the probes ran | nothing | under 1 minute |
@@ -33,6 +33,7 @@ Dispatch every command from a checkout with a token that may dispatch workflows 
 | 15 | A token can be narrowed at mint time to one repository and a subset of permissions | `gh workflow run probe-15-token-narrowing.yml -R kanon-e2e/harness` | none | nothing (a label or branch it could create is removed at once) | under 1 minute |
 | 16 | A workflow-level `concurrency` group can read `github.event.schedule`, so two schedules of one workflow get two groups | none: a dispatch-only probe can't fire a schedule. actionlint accepts `github.event.schedule` in a workflow-level group | Read GitHub's documentation of the `schedule` event's payload and of the contexts `concurrency` may read, and record what it says. The first two nights of the e2e workflow confirm it: a poll's run must not cancel the nightly's. A scheduled probe would need the Owner to waive the dispatch-only rule | nothing | nothing |
 | 17 | The Owner can revoke one `claude setup-token` token without disturbing the token Kanon's own lanes use | none: a subscription token is the Owner's, and no workflow makes or revokes one | **The Owner** makes a second token with `claude setup-token`, checks it works (`CLAUDE_CODE_OAUTH_TOKEN=<it> claude -p "say ok"`), revokes it on its own from the account's settings, checks it now fails, and checks a Kanon lane run (or the same command with the lanes' token) still succeeds. If the account offers no way to revoke one token alone, that is the answer: **FAIL** | nothing | a few seconds of the subscription's usage |
+| 18 | The Owner's subscription bills nothing past its included usage limits: with paid usage beyond them off, a run past the limits is refused, not billed | none: it is a setting of the Owner's subscription | **The Owner** opens the subscription's billing settings and records whether paid usage past the included limits is off, and if it is on, its monthly cap | nothing | nothing |
 
 ## The answers, as measured
 
