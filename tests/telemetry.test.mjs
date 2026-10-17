@@ -1,6 +1,7 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { initFlagProblems } from '../runner/lib/kanon.mjs';
 import { readWorkflows, workflowFiles } from './helpers/workflows.mjs';
 
 /**
@@ -56,8 +57,15 @@ const scenarioCode = () => [
   ...workflowFiles().filter((f) => f.startsWith('e2e')).map((f) => join('.github/workflows', f)),
 ];
 
+/**
+ * THE ONE LINE LET THROUGH: the list of flags the validator REFUSES a scenario's `kanon.init`
+ * (runner/lib/kanon.mjs), which names `--telemetry` so as to refuse it. The test below holds that
+ * a scenario passing it is refused.
+ */
+const REFUSAL = 'runner/lib/kanon.mjs: export const INIT_REFUSED = [';
+
 /** Every `path: line` in `paths` that would make a scenario repository send. */
-const sendingFrom = (paths) => paths.flatMap((p) => sendingLines(readFileSync(p, 'utf8')).map((l) => `${p}: ${l}`));
+const sendingFrom = (paths) => paths.flatMap((p) => sendingLines(readFileSync(p, 'utf8')).map((l) => `${p}: ${l}`)).filter((l) => !l.startsWith(REFUSAL));
 
 describe('the harness sends its telemetry and upstream findings, as an adopter that opts in', () => {
   const docs = readWorkflows();
@@ -81,6 +89,12 @@ describe('the harness sends its telemetry and upstream findings, as an adopter t
 describe('the scenario repositories send nothing (plan 0012 §4.2, decision 8)', () => {
   it('no flag the harness\'s code passes to `kanon init` turns telemetry or sharing on, and no scenario installs a collector', () => {
     expect(sendingFrom(scenarioCode())).toEqual([]);
+  });
+
+  it('the one line let through refuses the flags it names: a scenario that passes one is refused', () => {
+    for (const flag of ['--telemetry', '--consent=yes', '--upstream-findings=sent-with-evidence']) {
+      expect(initFlagProblems([flag]), flag).toEqual([expect.stringMatching(/is refused/)]);
+    }
   });
 
   it('catches every spelling of a flag that turns them on, and a collector\'s caller', () => {

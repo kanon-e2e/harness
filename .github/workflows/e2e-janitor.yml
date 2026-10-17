@@ -1,0 +1,26 @@
+# The janitor (Kanon plan 0012 §5.3; harness #16), hourly. It deletes the test organisation's
+# repositories that carry the `kanon-e2e` topic and are past their cut-off (janitor/janitor.mjs),
+# so a run that died, was cancelled or lost its `act` job leaves nothing behind for long. Its
+# latest run is green unless a repository older than a day couldn't be deleted.
+name: e2e-janitor
+
+on:
+  schedule:
+    - cron: "23 * * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: e2e-janitor
+  cancel-in-progress: false
+
+jobs:
+  janitor:
+    name: janitor
+    permissions:
+      contents: read
+    uses: ./.github/workflows/e2e-janitor-run.yml
+    secrets:
+      DRIVER_APP_ID: ${{ secrets.DRIVER_APP_ID }}
+      DRIVER_APP_KEY: ${{ secrets.DRIVER_APP_KEY }}
