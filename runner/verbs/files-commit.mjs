@@ -2,7 +2,8 @@
 // files the `kanon` segment left, or deletes paths, on a branch or the default branch, and pushes.
 // It runs git only in the `act` job's own clone. The `kanon` job's files arrive already taken as
 // data (`ctx.kanonFiles`, E4's handling of the crossing artifact); this verb still refuses any
-// path outside the clone or under `.git/` before writing a byte.
+// path outside the clone or under `.git/` before writing a byte, and any path through a symlink
+// the checked-out branch holds, since the branch may be one a workflow under test pushed.
 
 import { lstatSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, normalize, relative, sep } from 'node:path';
@@ -21,6 +22,22 @@ const outside = (path) => {
   const n = normalize(path);
   if (n === '..' || n.startsWith(`..${sep}`)) return 'outside the clone';
   if (n === '.git' || n.startsWith(`.git${sep}`)) return 'under .git/';
+  return null;
+};
+
+/** The first part of `path` under `clone` that exists as a symlink, or null. @param {string} clone @param {string} path */
+const symlinked = (clone, path) => {
+  let at = clone;
+  for (const part of normalize(path).split(sep)) {
+    at = join(at, part);
+    let st;
+    try {
+      st = lstatSync(at);
+    } catch {
+      return null;
+    }
+    if (st.isSymbolicLink()) return relative(clone, at);
+  }
   return null;
 };
 
@@ -77,6 +94,10 @@ export default {
     await git(['fetch', '-q', 'origin']);
     const exists = step.branch ? (await git(['ls-remote', '--exit-code', '--heads', 'origin', branch])).status === 0 : true;
     await git(['checkout', '-q', '-B', branch, `origin/${exists ? branch : ctx.defaultBranch}`]);
+    for (const f of files) {
+      const link = symlinked(ctx.clone, f.path);
+      if (link) throw new Error(`refused: \`${f.path}\` goes through \`${link}\`, a symlink`);
+    }
     for (const f of files) {
       mkdirSync(dirname(join(ctx.clone, f.path)), { recursive: true });
       writeFileSync(join(ctx.clone, f.path), f.bytes);

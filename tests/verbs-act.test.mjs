@@ -1,5 +1,5 @@
-import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, mkdirSync, readFileSync, readdirSync, symlinkSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { VOCABULARY } from '../runner/vocabulary.mjs';
 import { REPO, RELEASE, context, fail, inTurn, stubExec, stubGh, tempDir, writeTree } from './helpers/stubs.mjs';
@@ -141,6 +141,20 @@ describe('files.commit', () => {
     }
   });
 
+  it('refuses to write through a symlink the checked-out branch holds, writing nothing', async () => {
+    const away = tempDir('away-');
+    for (const [link, path] of [['x', 'x/.gitconfig'], ['x', 'x'], ['a/x', 'a/x/b/c.md']]) {
+      const clone = tempDir('clone-');
+      mkdirSync(dirname(join(clone, link)), { recursive: true });
+      symlinkSync(away, join(clone, link));
+      const x = stubExec();
+      await expect(run('files.commit', { from: 'kanon', message: 'm' }, context({ exec: x.exec, clone, kanonFiles: [{ path: 'ok.md', bytes: Buffer.from('x') }, { path, bytes: Buffer.from('x') }] }))).rejects.toThrow(/refused: .* symlink/);
+      expect(readdirSync(away)).toEqual([]);
+      expect(existsSync(join(clone, 'ok.md'))).toBe(false);
+      expect(git(x)).not.toContain('add -A');
+    }
+  });
+
   it('fails when git does', async () => {
     const x = stubExec([[(c) => c.args.includes('push'), () => ({ status: 1, stderr: 'rejected' })]]);
     await expect(run('files.commit', { delete: ['a'], message: 'm' }, context({ exec: x.exec, clone: tempDir() }))).rejects.toThrow(/git push.*rejected/);
@@ -235,11 +249,13 @@ describe('release.cut', () => {
       [`pr merge 12 -R ${REPO} --squash --auto`]: undefined,
       [`GET repos/${REPO}/pulls/12`]: { state: 'closed', merged: true, merged_at: '2026-10-17T10:00:00Z' },
       [`GET repos/${REPO}/releases?per_page=20`]: inTurn([], [
-        { id: 1, tag_name: 'v0.0.9', draft: false, created_at: '2026-10-16T10:00:00Z', author: { login: 'kanon-e2e-releaser[bot]' } },
-        { id: 2, tag_name: 'v0.1.0', draft: true, created_at: '2026-10-17T10:01:00Z', author: { login: 'kanon-e2e-releaser[bot]' } },
-        { id: 3, tag_name: 'v0.1.0', draft: false, created_at: '2026-10-17T10:01:00Z', author: { login: 'someone' } },
+        { id: 1, tag_name: 'v0.0.9', draft: false, created_at: '2026-10-16T10:00:00Z', published_at: '2026-10-16T10:01:00Z', author: { login: 'kanon-e2e-releaser[bot]' } },
+        { id: 2, tag_name: 'v0.1.0', draft: true, created_at: '2026-10-17T09:59:00Z', published_at: null, author: { login: 'kanon-e2e-releaser[bot]' } },
+        { id: 3, tag_name: 'v0.1.0', draft: false, created_at: '2026-10-17T09:59:00Z', published_at: '2026-10-17T10:01:00Z', author: { login: 'someone' } },
       ], [
-        { id: 4, tag_name: 'v0.1.0', draft: false, created_at: '2026-10-17T10:02:00Z', author: { login: 'kanon-e2e-releaser[bot]' } },
+        // GitHub's own shape (this repository's v0.1.0): `created_at` is the tagged commit's date,
+        // which a merge queue builds before `merged_at`; `published_at` is when it was published.
+        { id: 4, tag_name: 'v0.1.0', draft: false, created_at: '2026-10-17T09:59:08Z', published_at: '2026-10-17T10:00:08Z', author: { login: 'kanon-e2e-releaser[bot]' } },
       ]),
     });
     const ctx = context({ gh: g.gh });

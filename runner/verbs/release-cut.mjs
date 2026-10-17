@@ -32,7 +32,9 @@ export default {
     const merged = await poll(ctx, step.deadline, mergedProbe(ctx, pr.number), end);
     const release = await poll(ctx, step.deadline, async () => {
       const releases = await api(ctx, repoPath(ctx, 'releases?per_page=20'));
-      const found = releases.find((/** @type {any} */ r) => !r.draft && r.author?.login === botLogin(RELEASER) && Date.parse(r.created_at) >= Date.parse(merged.merged_at));
+      // `published_at`, not `created_at`: GitHub dates a Release's creation by its tagged commit,
+      // which a merge queue builds before the pull request's `merged_at`.
+      const found = releases.find((/** @type {any} */ r) => !r.draft && r.author?.login === botLogin(RELEASER) && Date.parse(r.published_at) >= Date.parse(merged.merged_at));
       return found ? met(found) : unmet(`${RELEASER} has published no Release since #${pr.number} merged`);
     }, end);
     ctx.state.release = { id: release.id, tag: release.tag_name };
