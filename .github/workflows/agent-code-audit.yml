@@ -1,0 +1,34 @@
+# The caller of Kanon's agent-code-audit lane, written by `kanon init` (docs/lanes.md). The triggers are yours;
+# the rest is the lane's, and `lane-check` holds this file to it.
+name: Code audit (Explorer)
+
+on:
+  schedule:
+    - cron: "30 7 */3 * *"
+  workflow_dispatch:
+    inputs:
+      max_turns:
+        description: "Raise the turn limit for this one dispatched run, a whole number from 1 to 200 (the lane's limit is 100). Only a caller's workflow_dispatch input may fill it, and it needs a reason. Kanon refuses anything else before any model call (docs/lanes.md, \"The turn budget\")."
+        required: false
+      reason:
+        description: "Why this dispatched run raises max_turns: required when max_turns is set, and recorded in the run's summary (docs/lanes.md, \"The turn budget\")."
+        required: false
+
+permissions:
+  actions: write
+  contents: read
+  id-token: write
+  issues: read
+
+jobs:
+  audit:
+    uses: yedeya-labs/kanon/.github/workflows/agent-code-audit.yml@candidate-v0.41.0
+    with:
+      max_turns: ${{ inputs.max_turns }}
+      reason: ${{ inputs.reason }}
+    secrets:
+      AUTHOR_APP_ID: ${{ secrets.AUTHOR_APP_ID }}
+      AUTHOR_APP_PRIVATE_KEY: ${{ secrets.AUTHOR_APP_PRIVATE_KEY }}
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+      QA_STORE_BUCKET: ${{ secrets.QA_STORE_BUCKET }}
+      QA_STORE_ROLE_ARN: ${{ secrets.QA_STORE_ROLE_ARN }}
