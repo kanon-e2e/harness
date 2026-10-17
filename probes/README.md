@@ -1,6 +1,6 @@
 # E0's platform probes
 
-Kanon's plan 0012 ("end-to-end tests in throwaway repositories, and a release gate on them") rests on eighteen platform assumptions. Its §12 lists them, and Kanon issue #968 asks for each to be measured here, in the test organisation, before the runner is built. The workflows in `.github/workflows/probe-*.yml` measure the ones a workflow can. This file lists every item, with each probe's dispatch command, and the steps a person takes for the rest.
+Kanon's plan 0012 ("end-to-end tests in throwaway repositories, and a release gate on them") rests on eighteen platform assumptions. Its §12 lists them, and Kanon issue #968 asks for each to be measured here, in the test organisation, before the runner is built. Item 19, added after §12, measures one more: what doctor can see on the read-only token of plan 0012's `kanon` job (decision 23 (b)). The workflows in `.github/workflows/probe-*.yml` measure the ones a workflow can. This file lists every item, with each probe's dispatch command, and the steps a person takes for the rest.
 
 ## The rules every probe keeps
 
@@ -8,7 +8,7 @@ Kanon's plan 0012 ("end-to-end tests in throwaway repositories, and a release ga
 - **Keys stay in their environment.** A job reads an App's id and key only when it declares the environment that holds them (`e2e` or `e2e-report`), and passes them only to `actions/create-github-app-token`, pinned by full SHA. The token is masked by the action; every value derived from one is masked too. No probe prints or uploads a token or a key. No probe reads `e2e-model`.
 - **Least permissions.** Every workflow sets `permissions: {}`. A job gets `actions: read` only where it reads a run's jobs or timing. Each App token asks for the permissions its probe needs, no more, except where the question is about the App's whole set (probe 09).
 - **Throwaway repositories are deleted.** A probe that creates a repository names it `e2e-probe-NN-<run id>-<attempt>` and deletes it in an `always()` step, or an `always()` job, whatever happened before.
-- **One fixed answer.** Each run writes a step summary table: the §12 item, its question, what was measured, and **PASS**, **FAIL**, **INCONCLUSIVE** or, for probe 09's list, **MEASURED**. Post that table with the run's link on #968.
+- **One fixed answer.** Each run writes a step summary table: the §12 item, its question, what was measured, and **PASS**, **FAIL**, **INCONCLUSIVE** or, for probe 09's and probe 19's lists, **MEASURED**. Post that table with the run's link on #968.
 
 ## The items
 
@@ -34,6 +34,7 @@ Dispatch every command from a checkout with a token that may dispatch workflows 
 | 16 | A workflow-level `concurrency` group can read `github.event.schedule`, so two schedules of one workflow get two groups | none: a dispatch-only probe can't fire a schedule. actionlint accepts `github.event.schedule` in a workflow-level group | Read GitHub's documentation of the `schedule` event's payload and of the contexts `concurrency` may read, and record what it says. The first two nights of the e2e workflow confirm it: a poll's run must not cancel the nightly's. A scheduled probe would need the Owner to waive the dispatch-only rule | nothing | nothing |
 | 17 | The Owner can revoke one `claude setup-token` token without disturbing the token Kanon's own lanes use | none: a subscription token is the Owner's, and no workflow makes or revokes one | **The Owner** makes a second token with `claude setup-token`, checks it works (`CLAUDE_CODE_OAUTH_TOKEN=<it> claude -p "say ok"`), revokes it on its own from the account's settings, checks it now fails, and checks a Kanon lane run (or the same command with the lanes' token) still succeeds. If the account offers no way to revoke one token alone, that is the answer: **FAIL** | nothing | a few seconds of the subscription's usage |
 | 18 | The Owner's subscription bills nothing past its included usage limits: with paid usage beyond them off, a run past the limits is refused, not billed | none: it is a setting of the Owner's subscription | **The Owner** opens the subscription's billing settings and records whether paid usage past the included limits is off, and if it is on, its monthly cap | nothing | nothing |
+| 19 (added after §12) | Doctor, run on an adopted repository with the `kanon` job's read-only token (decision 23 (b): Contents, Issues, Administration, Actions and Pull requests read; no Workflows, no Secrets, no write), lists which checks it can't run or answers differently from probe 09's full driver token | `gh workflow run probe-19-doctor-readonly.yml -R kanon-e2e/harness` (`-f kanon-ref=` the release the harness pins, default `candidate-v0.41.0`); answers **MEASURED** with the `unchecked` list and the findings, also in the run's log, and doctor's JSON as an artifact | none | nothing | about 2 minutes |
 
 ## The answers, as measured
 
