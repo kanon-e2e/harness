@@ -28,6 +28,9 @@
 - **Review trigger:** `labelled`
 - **Overseer:** `installed`
 - **Chat channel:** none yet
+- **Waived doctor finding:** `notify.none` on `.github/actions/notify/action.yml` (no chat channel is chosen: the harness posts nothing, and the project digest's health job still files its issues)
+- **Waived doctor finding:** `deploy.reference-undeclared` on `docs/qa/adoption.md` (the harness deploys nothing: it declares no environment, and its end-to-end runs come from `main`, not from its releases)
+- **Waived doctor finding:** `secret.missing` on `kanon-e2e/harness` for `KANON_TELEMETRY_READER_ROLE` (an optional secret no job reads, asked for by mistake: https://github.com/yedeya-labs/kanon/issues/1090; remove this waiver once that fix is released and pinned)
 
 ## Data
 
