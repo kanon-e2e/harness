@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.2.0](https://github.com/kanon-e2e/harness/compare/v0.1.0...v0.2.0) (2026-10-17)
+
+
+### Features
+
+* the scenario format, its validator and the step vocabulary ([#18](https://github.com/kanon-e2e/harness/issues/18)) ([9dc1f96](https://github.com/kanon-e2e/harness/commit/9dc1f96b46fbba4e0e9a9afb9a37c7a782b2b831))
+
+
+### CI
+
+* send the harness's telemetry and upstream findings to Kanon, as an adopter that opts in ([#17](https://github.com/kanon-e2e/harness/issues/17)) ([1b46b24](https://github.com/kanon-e2e/harness/commit/1b46b2499a96ecc8b0c712f1e9e899190c1956db))
+
 ## 0.1.0 (2026-10-17)
 
 
