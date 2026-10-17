@@ -20,7 +20,7 @@
 
 ## Bootstrap
 
-`in bootstrap since 2026-10-17`
+`ended 2026-10-17`
 
 ## Choices
 
