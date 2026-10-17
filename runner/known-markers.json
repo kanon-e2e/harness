@@ -1,0 +1,40 @@
+{
+  "$comment": "The harness's list of known markers (Kanon plan 0012 §4.3): the only markers an expectation may look for in a comment, a review or a body. Each is a marker Kanon already writes for its own reasons, never one added for the tests (the no-leak rule). `pattern` is a regular expression matched against the text; `writtenBy` says where Kanon writes it. It lives under runner/, so a change to it is the Owner's to merge (docs/qa/escalation-paths.md).",
+  "markers": [
+    {
+      "id": "release-pr-guard",
+      "pattern": "<!-- kanon-release-pr-guard [0-9a-f]{40} -->",
+      "writtenBy": "yedeya-labs/kanon .github/workflows/release.yml: the release-PR guard's comment on a stale release pull request, with its head's commit"
+    },
+    {
+      "id": "role:explorer",
+      "pattern": "<!--\\s*kanon:role=explorer\\s*-->",
+      "writtenBy": "yedeya-labs/kanon scripts/lib/role-marker.mjs: the Explorer's role marker on its posts' header line"
+    },
+    {
+      "id": "role:implementer",
+      "pattern": "<!--\\s*kanon:role=implementer\\s*-->",
+      "writtenBy": "yedeya-labs/kanon scripts/lib/role-marker.mjs: the Implementer's role marker on its posts' header line"
+    },
+    {
+      "id": "role:reviewer",
+      "pattern": "<!--\\s*kanon:role=reviewer\\s*-->",
+      "writtenBy": "yedeya-labs/kanon scripts/lib/role-marker.mjs: the Reviewer's role marker on its posts' header line"
+    },
+    {
+      "id": "role:merger",
+      "pattern": "<!--\\s*kanon:role=merger\\s*-->",
+      "writtenBy": "yedeya-labs/kanon scripts/lib/role-marker.mjs: the Merger's role marker on its posts' header line"
+    },
+    {
+      "id": "role:lead",
+      "pattern": "<!--\\s*kanon:role=lead\\s*-->",
+      "writtenBy": "yedeya-labs/kanon scripts/lib/role-marker.mjs: the Lead's role marker on its posts' header line"
+    },
+    {
+      "id": "role:overseer",
+      "pattern": "<!--\\s*kanon:role=overseer\\s*-->",
+      "writtenBy": "yedeya-labs/kanon scripts/lib/role-marker.mjs: the Overseer's role marker on its posts' header line"
+    }
+  ]
+}
