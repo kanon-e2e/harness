@@ -2,10 +2,18 @@
 # One job, which declares the environment `e2e` itself and reads the driver's id and key from
 # it. It prints neither: it reports only whether each is non-empty, and whether a mint with
 # them succeeded (a read-only token scoped to this repository, revoked when the job ends).
+# A called workflow sees only the secrets it declares under `on.workflow_call.secrets` and its
+# caller maps (Kanon #1049): an undeclared one reads empty even inside `environment: e2e`.
+# The caller's `${{ secrets.X }}` is evaluated in this job's scope, environment first.
 name: probe-12 environment in a called workflow, the called job
 
 on:
   workflow_call:
+    secrets:
+      DRIVER_APP_ID:
+        required: false
+      DRIVER_APP_KEY:
+        required: false
     outputs:
       id-present:
         description: yes when the environment's DRIVER_APP_ID was readable
