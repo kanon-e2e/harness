@@ -33,7 +33,15 @@ describe('e2e.yml: its triggers, never a pull request (§7)', () => {
     const contexts = [...e2e.concurrency.group.matchAll(/\b([a-z_]+)\.[a-z_.]+/g)].map((m) => m[1]);
     expect(contexts.length).toBeGreaterThan(0);
     expect(contexts.every((c) => ['github', 'inputs'].includes(c))).toBe(true);
-    expect(e2e.concurrency.group).toMatch(/github\.event\.schedule/);
+    expect(e2e.concurrency.group).toBe('e2e-${{ inputs.release || github.event.schedule }}');
+  });
+
+  it('the poll and the nightly sit in different groups, so a queued nightly isn\'t replaced by the next poll', () => {
+    const group = (inputs, schedule) => e2e.concurrency.group.replace(/\$\{\{ inputs\.release \|\| github\.event\.schedule \}\}/, inputs.release || schedule);
+    const poll = group({}, SETTINGS.schedules.poll);
+    const nightly = group({}, SETTINGS.schedules.nightly);
+    expect(poll).not.toBe(nightly);
+    expect(group({ release: 'v0.41.0' }, '')).not.toBe(poll);
   });
 });
 
@@ -58,6 +66,7 @@ describe('e2e.yml: the jobs of §5.2, in order', () => {
 
   it('every scenario job runs unless the run was cancelled, `start` failed or `plan` said no; each needs the one before', () => {
     expect(e2e.jobs.provision.if).toBe(RUNS_IF);
+    for (const name of ['provision', 'model-key']) expect(e2e.jobs[name].needs, name).toEqual(expect.arrayContaining(['plan', 'start']));
     expect(e2e.jobs['model-key'].if).toBe("${{ !cancelled() && needs.start.result != 'failure' && needs.plan.outputs.go == 'true' && needs.plan.outputs.model-scenarios != '[]' }}");
     const before = { 'kanon-1': 'model-key', 'act-1': 'kanon-1', 'kanon-2': 'act-1', 'act-2': 'kanon-2', 'kanon-3': 'act-2', 'act-3': 'kanon-3' };
     for (const name of SCENARIO_JOBS) {
@@ -96,6 +105,7 @@ describe('e2e.yml: the jobs of §5.2, in order', () => {
       expect(write.env[`${upper}_KEY`]).toBe(`\${{ contains(matrix.scenario.apps, '${app}') && secrets.${upper}_APP_KEY || '' }}`);
     }
     expect(write.run).toMatch(/_APP_PRIVATE_KEY/);
+    expect(JSON.stringify(e2e.jobs.provision)).not.toMatch(/CLAUDE|OAUTH|ANTHROPIC/i);
     expect(e2e.jobs.provision.steps.at(-1).run).toMatch(/kanon-e2e-provisioned/);
   });
 });

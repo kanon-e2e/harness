@@ -68,6 +68,7 @@ describe('the poll (§7, decision 19)', () => {
       const out = await poll(world({ checks: [c] }));
       expect(out.go, `${c.status} ${c.conclusion}`).toBe(false);
       expect(out.reason).toMatch(/candidate-v0\.42\.0/);
+      expect(out.reason).toContain(c.status === 'completed' ? c.conclusion : c.status);
     }
   });
 
@@ -136,7 +137,7 @@ describe('one run at a time (§5.2, §7; the Owner, 2026-10-17)', () => {
   it('the poll leaves a candidate alone while a nightly is in flight', async () => {
     const out = await poll(world({ inFlight: [[7, `e2e-nightly-${MAIN}`]] }));
     expect(out.go).toBe(false);
-    expect(out.reason).toMatch(/nightly/);
+    expect(out.reason).toMatch(/^waiting: the nightly run/);
   });
 
   it('a dispatch stops at `plan` while a nightly or a candidate\'s run is in flight', async () => {
