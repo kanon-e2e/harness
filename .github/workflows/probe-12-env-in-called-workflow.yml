@@ -2,7 +2,7 @@
 # environment and read that environment's secrets (a calling job can't declare one), and the
 # environment's deployment policy applies to it.
 # This caller holds nothing itself: it maps the driver's id and key by name, and the called
-# job resolves them from its own environment (Kanon #1049). Its one call runs probe-12-env-in-called-workflow-job.yml, whose
+# job resolves them from its own environment (Kanon #1049). Its one call runs probe-12-env-in-called-workflow-callee.yml, whose
 # one job declares `environment: e2e`, checks the driver's id and key are there without
 # printing them, and proves the key by minting a read-only token with it. Creates nothing.
 # Dispatch it twice (probes/README.md): from `main`, the job must read the secrets; from any
@@ -20,9 +20,9 @@ concurrency:
 
 jobs:
   call:
-    name: call the -job workflow
+    name: call the called workflow
     permissions: {}
-    uses: ./.github/workflows/probe-12-env-in-called-workflow-job.yml
+    uses: ./.github/workflows/probe-12-env-in-called-workflow-callee.yml
     secrets:
       DRIVER_APP_ID: ${{ secrets.DRIVER_APP_ID }}
       DRIVER_APP_KEY: ${{ secrets.DRIVER_APP_KEY }}

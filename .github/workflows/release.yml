@@ -1,0 +1,23 @@
+# The release lane (Kanon's docs/release.md, `K-SHIP-7`): a thin caller of Kanon's release
+# workflow, pinned to the same exact release as the lanes. On each push to `main` it updates the
+# release PR, which the test Releaser opens; merging that PR tags `vX.Y.Z` and publishes it.
+# The harness releases only because its releases add coverage (Kanon plan 0012 §3); its
+# end-to-end runs still come from `main`.
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+permissions: {}
+
+jobs:
+  release:
+    name: Release
+    permissions:
+      contents: write
+      pull-requests: write
+    uses: yedeya-labs/kanon/.github/workflows/release.yml@candidate-v0.41.0
+    secrets:
+      RELEASER_APP_ID: ${{ secrets.RELEASER_APP_ID }}
+      RELEASER_APP_PRIVATE_KEY: ${{ secrets.RELEASER_APP_PRIVATE_KEY }}
