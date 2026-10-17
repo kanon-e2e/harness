@@ -1,0 +1,8 @@
+{
+  "$comment": "The test organisation's copies of Kanon's Apps (Kanon plan 0012 §3, decision 2), by identity, as scenario.json's `apps` names them: the slug register.write writes into a scenario repository's App register, and that release.cut and the expectations read as an author.",
+  "apps": {
+    "author": "kanon-e2e-author",
+    "judge": "kanon-e2e-judge",
+    "releaser": "kanon-e2e-releaser"
+  }
+}

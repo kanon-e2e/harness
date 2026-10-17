@@ -1,0 +1,73 @@
+// `repo.apply` (Kanon plan 0012 §4.2, decision 23 (b)): does what the kept `kanon init`
+// document's `steps-left` findings leave to a person, with the harness's own code, since the
+// `kanon` job's token is read-only. It applies only what those findings name:
+//
+//   first call:  `merge.settings` (K-ADOPT-1 step 5), `label.create` (step 6: the labels the
+//                release's requirements.json lists, read as data), `milestone.buckets` (step 7),
+//                `ruleset.create` (step 8);
+//   second call: `ruleset.require-check`, the ruleset's required `Lane check` rule, once the
+//                pushed callers are on the default branch and a job there reports it.
+
+import { BUCKETS, CHECK_RULE, LANE_CHECK, MERGE_SETTINGS, RULESET_NAME, isLabelTemplate, rulesetBody } from '../lib/adopt.mjs';
+import { api, repoPath } from '../lib/gh.mjs';
+import { kept } from '../lib/state.mjs';
+
+/** The findings each call applies, in K-ADOPT-1's order. */
+const CALLS = [['merge.settings', 'label.create', 'milestone.buckets', 'ruleset.create'], ['ruleset.require-check']];
+
+/** @typedef {{ release: string, document: any }} Kept */
+
+/** @type {Record<string, (ctx: any, k: Kept) => Promise<void>>} */
+const APPLY = {
+  'merge.settings': async (ctx) => {
+    await api(ctx, repoPath(ctx), { method: 'PATCH', body: MERGE_SETTINGS });
+  },
+  'label.create': async (ctx, k) => {
+    const file = await api(ctx, `repos/yedeya-labs/kanon/contents/requirements.json?ref=${k.release}`);
+    const wanted = JSON.parse(Buffer.from(file.content, file.encoding).toString('utf8')).labels.filter((/** @type {string} */ l) => !isLabelTemplate(l));
+    const have = new Set((await api(ctx, repoPath(ctx, 'labels?per_page=100'), { paginate: true })).map((/** @type {any} */ l) => l.name));
+    for (const name of wanted) if (!have.has(name)) await api(ctx, repoPath(ctx, 'labels'), { method: 'POST', body: { name } });
+  },
+  'milestone.buckets': async (ctx) => {
+    const have = new Set((await api(ctx, repoPath(ctx, 'milestones?state=all&per_page=100'), { paginate: true })).map((/** @type {any} */ m) => m.title));
+    for (const title of BUCKETS) if (!have.has(title)) await api(ctx, repoPath(ctx, 'milestones'), { method: 'POST', body: { title } });
+  },
+  'ruleset.create': async (ctx, k) => {
+    if (await ruleset(ctx)) return;
+    await api(ctx, repoPath(ctx, 'rulesets'), { method: 'POST', body: rulesetBody(k.document.inspection?.mergeQueue === 'yes') });
+  },
+  'ruleset.require-check': async (ctx) => {
+    const found = await ruleset(ctx);
+    if (!found) throw new Error(`there is no ruleset named "${RULESET_NAME}" to add the required "${LANE_CHECK}" check to`);
+    const full = await api(ctx, repoPath(ctx, `rulesets/${found.id}`));
+    const rules = structuredClone(full.rules ?? []);
+    const checks = rules.find((/** @type {any} */ r) => r.type === 'required_status_checks');
+    const listed = (checks?.parameters?.required_status_checks ?? []).some((/** @type {any} */ c) => c.context === LANE_CHECK);
+    if (listed) return;
+    if (checks) checks.parameters = { ...checks.parameters, required_status_checks: [...(checks.parameters?.required_status_checks ?? []), { context: LANE_CHECK }] };
+    else rules.push(structuredClone(CHECK_RULE));
+    await api(ctx, repoPath(ctx, `rulesets/${found.id}`), { method: 'PUT', body: { rules } });
+  },
+};
+
+/** The ruleset `init` would have made, or null. @param {any} ctx */
+const ruleset = async (ctx) => (await api(ctx, repoPath(ctx, 'rulesets?per_page=100'), { paginate: true })).find((/** @type {any} */ r) => r.name === RULESET_NAME) ?? null;
+
+export default {
+  verb: 'repo.apply',
+  kind: 'act',
+  waits: false,
+  args: {},
+  uses: () => [['documents', 'init']],
+  /** @param {any} _step @param {any} ctx */
+  async run(_step, ctx) {
+    const k = kept(ctx, 'init');
+    const call = ctx.state.repoApply ?? 0;
+    if (call >= CALLS.length) throw new Error('repo.apply runs at most twice: this is a third call');
+    const named = new Set((k.document.findings ?? []).map((/** @type {any} */ f) => f.id));
+    const applying = CALLS[call].filter((id) => named.has(id));
+    for (const id of applying) await APPLY[id](ctx, k);
+    ctx.state.repoApply = call + 1;
+    ctx.state.applied = [...(ctx.state.applied ?? []), ...applying];
+  },
+};
