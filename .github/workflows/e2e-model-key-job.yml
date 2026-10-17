@@ -1,0 +1,86 @@
+# e2e — the model key (Kanon plan 0012 §5.2; harness #16)
+#
+# CALLED ONLY BY `e2e-model-key-run.yml`. The one job in environment `e2e-model`, which holds the
+# real-model token, `E2E_CLAUDE_CODE_OAUTH_TOKEN` (`claude: subscription`). Three steps and
+# nothing else: receive the driver's Secrets token, write the real-model token into the scenario
+# repository as `CLAUDE_CODE_OAUTH_TOKEN`, revoke the driver's token. No checkout, no harness code,
+# no Kanon code: nothing runs beside the token but `gh secret set`.
+name: e2e — the model key
+
+on:
+  workflow_call:
+    inputs:
+      repository-name:
+        required: true
+        type: string
+      mint-attempt:
+        description: The run attempt the `mint` job minted the token for; a token of an earlier attempt is refused by name.
+        required: true
+        type: string
+    secrets:
+      app-token:
+        description: The Secrets token, hex-encoded by the `mint` job.
+        required: true
+      E2E_CLAUDE_CODE_OAUTH_TOKEN:
+        required: false
+
+jobs:
+  write:
+    name: write the model token
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    environment: e2e-model
+    permissions: {}
+    steps:
+      - name: Receive the App token
+        id: app-token
+        env:
+          SEALED: ${{ secrets.app-token }}
+          MINT_ATTEMPT: ${{ inputs.mint-attempt }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          if [ -z "$SEALED" ] || ! printf %s "$SEALED" | grep -Eq '^([0-9a-f]{2})+$'; then
+            echo "::error title=app-token::no App token arrived from the mint job; see that job's log for why the mint failed."
+            exit 1
+          fi
+          if [ "$MINT_ATTEMPT" != "$RUN_ATTEMPT" ]; then
+            echo "::error title=app-token::this is attempt $RUN_ATTEMPT, but the App token was minted for attempt $MINT_ATTEMPT and revoked when that attempt ended. Use \"Re-run all jobs\"."
+            exit 1
+          fi
+          TOKEN="$(printf '%b' "$(printf %s "$SEALED" | sed 's/../\\x&/g')")"
+          echo "::add-mask::$TOKEN"
+          echo "token=$TOKEN" >> "$GITHUB_OUTPUT"
+
+      - name: Write the model token into the scenario repository
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          MODEL_TOKEN: ${{ secrets.E2E_CLAUDE_CODE_OAUTH_TOKEN }}
+          REPOSITORY: kanon-e2e/${{ inputs.repository-name }}
+        run: |
+          set -euo pipefail
+          if [ -z "$MODEL_TOKEN" ]; then
+            echo "::error title=model-key::the e2e-model environment's E2E_CLAUDE_CODE_OAUTH_TOKEN did not arrive; the scenario reads infra"
+            exit 1
+          fi
+          printf %s "$MODEL_TOKEN" | gh secret set CLAUDE_CODE_OAUTH_TOKEN -R "$REPOSITORY"
+          echo "Wrote CLAUDE_CODE_OAUTH_TOKEN into $REPOSITORY."
+
+      - name: Revoke the App token
+        if: ${{ always() }}
+        env:
+          SEALED: ${{ secrets.app-token }}
+          MINT_ATTEMPT: ${{ inputs.mint-attempt }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          API_URL: ${{ github.api_url }}
+        run: |
+          if [ -z "$SEALED" ] || ! printf %s "$SEALED" | grep -Eq '^([0-9a-f]{2})+$' || [ "$MINT_ATTEMPT" != "$RUN_ATTEMPT" ]; then
+            echo "No App token of this attempt to revoke"
+            exit 0
+          fi
+          TOKEN="$(printf '%b' "$(printf %s "$SEALED" | sed 's/../\\x&/g')")"
+          echo "::add-mask::$TOKEN"
+          STATUS="$(curl -sS -o /dev/null -w '%{http_code}' -X DELETE \
+            -H "Authorization: Bearer $TOKEN" -H "Accept: application/vnd.github+json" \
+            "$API_URL/installation/token" || true)"
+          if [ "$STATUS" = "204" ]; then echo "App token revoked"; else echo "::warning title=app-token::the App token could not be revoked (HTTP ${STATUS:-none}); it expires within the hour"; fi

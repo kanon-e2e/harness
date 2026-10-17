@@ -54,6 +54,20 @@ A verb that waits takes a `deadline` in minutes, and polls. [`scenarios/README.m
 
 Everything under `runner/`, the verbs, the validator and the known markers included, runs with the driver's token. So every such pull request is the Owner's to merge ([`docs/qa/escalation-paths.md`](docs/qa/escalation-paths.md)).
 
+## Runs
+
+**A scenario's life** (plan 0012 §5.1). `provision` creates a fresh public repository, `e2e-<scenario>-<run>-<attempt>`, empty, with the scenario's test Apps' secrets and the `kanon-e2e` topic. Each phase is then a `kanon` job, which runs Kanon's code at the release under test in a clone with a read-only token and writes nothing to GitHub, and an `act` job, which pushes what Kanon wrote and does the rest with the harness's own code. The first `act` job lays `start/` as the repository's first commit. The `act` job that learns the result ends the repository. [`docs/jobs.md`](docs/jobs.md) lists every job, which secret each holds and why, and the sizing.
+
+**Three triggers, never a pull request** (§7). The **poll**, every 15 minutes, runs the latest candidate that has no `kanon-e2e` check run from the Reporter. It re-runs a candidate whose check run completed `neutral` over an hour ago, and gives one candidate at most six runs. The **nightly**, once a day, runs the latest candidate if one is newer than the latest stable release, else the stable. It runs only when Kanon's `main` moved since the last nightly, or when none has run for seven days. A **dispatch** runs an exact release. A run spends the organisation's minutes and the Apps' keys, and what it tests is Kanon's release, not a change to this repository, so nothing runs on a pull request.
+
+**One run at a time.** `plan` stops a run while another run is in flight, before any repository is created. A nightly gives way to a candidate's run: its `plan` ends "skipped: a candidate's run covers tonight". It records nothing, so the next night runs if `main` still differs. What it loses is that night's run of `main`'s release: the candidate's run tests the candidate, which is usually that same code. The poll waits for its next tick. A dispatch stops, and says why.
+
+**Pass, fail, infra.** A scenario reads `fail` when an expectation was false, or a deadline passed. Its repository is kept 24 hours, archived, with the `kanon-e2e-failed` topic, for a person to look at. It reads `infra` when GitHub, a token, or the harness's own preconditions failed: no finding about Kanon, and never a pass. The run's verdict is `pass` only when every scenario passed. It is `fail` when any failed, and `infra-only` otherwise. A candidate's check run completes `success`, `failure` or `neutral` to match, and the poll re-runs a `neutral` one after an hour. The hourly janitor deletes whatever a run left behind.
+
+**Dispatching a run.** Actions → `e2e` → Run workflow, with `release`, an exact `vX.Y.Z` or `candidate-vX.Y.Z`. `select` takes one scenario's id or one family. With the whole catalogue, a candidate's dispatch is a candidate's run: it posts the check run, and counts toward the six. Re-run a run with "Re-run all jobs": each token is minted per attempt, and a job handed an earlier attempt's token refuses it by name.
+
+**Reading a red run.** Start at `verdict`'s summary: each scenario's result. Then open the scenario's `act` job whose summary names the first failure: the phase, the segment, the step, and the expectation's message. Each `act` and `kanon` job's summary lists every step's outcome and duration. A `fail`'s repository is still there, archived, for 24 hours. `infra` means the run says nothing about Kanon: the poll re-runs a candidate's `neutral` check run after an hour.
+
 ## Tests
 
 `npm ci && npm test` runs them on Vitest; CI runs them on every pull request. [`docs/qa/stack.md`](docs/qa/stack.md) lists the gates.
@@ -63,4 +77,10 @@ Everything under `runner/`, the verbs, the validator and the known markers inclu
 - `tests/vocabulary.test.mjs` holds the vocabulary to plan 0012 §4.2: the closed set, each verb's segment kind, the deadline and backoff of every verb that waits, Kanon's code run only through `npx` at the release, the known markers, and the two tables of verbs.
 - `tests/verbs-kanon.test.mjs`, `tests/verbs-act.test.mjs` and `tests/verbs-read.test.mjs` test each verb on a stubbed `gh`, `npx` and `git`.
 - `tests/workflows.test.mjs` holds the harness's workflows to plan 0012 §5.2: no job that holds an App key runs someone else's code, each environment is named only by the jobs §5.2 lists and the probes, no `-job` workflow names a private key, and no workflow runs on a pull-request event with a secret, other than those Kanon's own lane callers map by name into their lane.
+- `tests/e2e-workflows.test.mjs` holds `e2e.yml` and its pairs to plan 0012 §5.2: the jobs, their order and conditions, each pair's mint and token, the read-only `kanon` token, an `act` job that runs no Kanon code, and every matrix's max-parallel and every job's timeout held to `runner/settings.json`.
+- `tests/runner.test.mjs` tests the runner a segment at a time on a stubbed `gh` and `npx` and a real `git`: pass, fail and infra, the retries, the state, and how the repository ends.
+- `tests/artifact.test.mjs` holds the `act` job to taking the `kanon` job's tree as data: a hostile tree runs nothing, reads nothing outside it, and pushes nothing.
+- `tests/plan.test.mjs` tests `plan`'s decisions: the poll, the nightly, the dispatch, and one run at a time.
+- `tests/verdict-report.test.mjs` tests the verdict and the check run's conclusion `report` gives it.
+- `tests/sizing.test.mjs` and `tests/janitor.test.mjs` hold the sizing and the janitor's cut-offs to `runner/settings.json`, and the janitor to deleting only what it may.
 - `tests/telemetry.test.mjs` holds the harness's collector caller and its `sent with evidence` choice, and holds the runner, the scenarios and the `e2e*.yml` workflows to passing no `kanon init` flag that turns telemetry or sharing on, and to installing no collector.

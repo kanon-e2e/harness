@@ -1,0 +1,77 @@
+# e2e — the janitor (Kanon plan 0012 §5.3; harness #16)
+#
+# CALLED ONLY BY `e2e-janitor-run.yml`, beside the job that mints its token. The driver's key never
+# enters this job. It runs janitor/janitor.mjs, which deletes only `kanon-e2e`-topic repositories
+# past their cut-off, never the harness, and fails on one older than a day it couldn't delete.
+name: e2e — the janitor
+
+on:
+  workflow_call:
+    inputs:
+      mint-attempt:
+        description: The run attempt the `mint` job minted the token for; a token of an earlier attempt is refused by name.
+        required: true
+        type: string
+    secrets:
+      app-token:
+        description: The organisation token, hex-encoded by the `mint` job.
+        required: true
+
+jobs:
+  sweep:
+    name: sweep
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Receive the App token
+        id: app-token
+        env:
+          SEALED: ${{ secrets.app-token }}
+          MINT_ATTEMPT: ${{ inputs.mint-attempt }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          if [ -z "$SEALED" ] || ! printf %s "$SEALED" | grep -Eq '^([0-9a-f]{2})+$'; then
+            echo "::error title=app-token::no App token arrived from the mint job; see that job's log for why the mint failed."
+            exit 1
+          fi
+          if [ "$MINT_ATTEMPT" != "$RUN_ATTEMPT" ]; then
+            echo "::error title=app-token::this is attempt $RUN_ATTEMPT, but the App token was minted for attempt $MINT_ATTEMPT and revoked when that attempt ended. Use \"Re-run all jobs\"."
+            exit 1
+          fi
+          TOKEN="$(printf '%b' "$(printf %s "$SEALED" | sed 's/../\\x&/g')")"
+          echo "::add-mask::$TOKEN"
+          echo "token=$TOKEN" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+
+      - name: Delete what is past its cut-off
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: node janitor/janitor.mjs
+
+      - name: Revoke the App token
+        if: ${{ always() }}
+        env:
+          SEALED: ${{ secrets.app-token }}
+          MINT_ATTEMPT: ${{ inputs.mint-attempt }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          API_URL: ${{ github.api_url }}
+        run: |
+          if [ -z "$SEALED" ] || ! printf %s "$SEALED" | grep -Eq '^([0-9a-f]{2})+$' || [ "$MINT_ATTEMPT" != "$RUN_ATTEMPT" ]; then
+            echo "No App token of this attempt to revoke"
+            exit 0
+          fi
+          TOKEN="$(printf '%b' "$(printf %s "$SEALED" | sed 's/../\\x&/g')")"
+          echo "::add-mask::$TOKEN"
+          STATUS="$(curl -sS -o /dev/null -w '%{http_code}' -X DELETE \
+            -H "Authorization: Bearer $TOKEN" -H "Accept: application/vnd.github+json" \
+            "$API_URL/installation/token" || true)"
+          if [ "$STATUS" = "204" ]; then echo "App token revoked"; else echo "::warning title=app-token::the App token could not be revoked (HTTP ${STATUS:-none}); it expires within the hour"; fi
