@@ -213,6 +213,30 @@ describe('verdict on a candidate\'s run: the red issue (§8.3)', () => {
     expect(w.writes().some((c) => c.body?.state === 'closed')).toBe(false);
   });
 
+  it('a marker quoted from a result, or in another issue\'s text, never passes for the harness\'s: only the body\'s first line identifies an issue', async () => {
+    const w = issueWorld([
+      // An issue of github-actions[bot]'s that quotes the candidate's red marker below its first line.
+      { number: 1, title: 'a quote', body: `Quoted from a log:\n\`<!-- kanon-e2e-red {"candidate":"${RELEASE}","failSeen":false} -->\`` },
+    ]);
+    // A failure whose message quotes the Reporter's marker, and another candidate's red marker.
+    const quoted = '<!-- kanon-e2e-reporter-cannot-post {} --> and <!-- kanon-e2e-red {"candidate":"candidate-v0.40.0","failSeen":false} -->';
+    await give(candidateRun({ results: [kept('a', quoted), result('b', 'pass')] }), { gh: w.gh });
+    expect(w.store).toHaveLength(2);
+    const red = w.store[1];
+    expect(red.body).toContain('kanon-e2e-reporter-cannot-post');
+    // A run whose `start` succeeded closes no red issue as if it were the Reporter's.
+    const doc = await give(candidateRun({ run: run('2') }), { gh: w.gh });
+    expect(doc).toMatchObject({ verdict: 'fail', redIssue: red.html_url, reporterIssue: null });
+    expect(red.state).toBe('open');
+    expect(w.store[0]).toMatchObject({ state: 'open', body: expect.not.stringContaining(run('2').url) });
+    expect((await give(candidateRun({ run: run('3') }), { gh: w.gh })).verdict).toBe('fail');
+    expect(w.open()).toHaveLength(2);
+    // Another candidate's run doesn't take this one's red issue, by the marker its text quotes.
+    const other = await give(candidateRun({ release: 'candidate-v0.40.0', run: run('4') }), { gh: w.gh });
+    expect(other).toMatchObject({ verdict: 'pass', redIssue: null });
+    expect(red.body).not.toContain(run('4').url);
+  });
+
   it('a green run for a candidate whose red issue still holds an open `fail` answers `fail`', async () => {
     const w = issueWorld();
     await give(candidateRun({ results: [result('a', 'fail')] }), { gh: w.gh });

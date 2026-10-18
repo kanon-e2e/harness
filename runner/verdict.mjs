@@ -13,8 +13,8 @@
 //               Reporter couldn't post. Never `pass`.
 //
 // ONLY ON A CANDIDATE'S RUN, it reads and writes this repository's issues with its workflow token
-// (`issues: write`, no key). Each is found by the harness's marker in its body, among the open
-// issues `github-actions[bot]` opened, never by its title:
+// (`issues: write`, no key). Each is found by the harness's marker on its body's first line, never
+// one quoted below it, among the open issues `github-actions[bot]` opened, never by its title:
 //
 //   `e2e: candidate-vX.Y.Z is red`  one per candidate, filed on a verdict that isn't `pass` and
 //     edited by each later run of the candidate. Its marker records whether a run read `fail`. A
@@ -105,9 +105,13 @@ export function judge({ trigger = '', planned, results, startResult, held = null
   return { schema: VERDICT_SCHEMA, verdict: own, reason, own, scenarios };
 }
 
-/** The JSON a harness marker carries in an issue's body, or null. @param {unknown} body @param {string} kind */
+/**
+ * The JSON a harness marker carries as an issue body's first line, or null. Only there: a body
+ * quotes text from results below it, and a quoted marker never identifies an issue.
+ * @param {unknown} body @param {string} kind
+ */
 const readMarker = (body, kind) => {
-  const m = String(body ?? '').match(new RegExp(`<!-- ${kind} (\\{[^\\n]*?\\}) -->`));
+  const m = String(body ?? '').match(new RegExp(`^<!-- ${kind} (\\{[^\\n]*?\\}) -->(?:\\r?\\n|$)`));
   if (!m) return null;
   try {
     const o = JSON.parse(m[1]);
