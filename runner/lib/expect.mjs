@@ -11,6 +11,12 @@ import { differs } from './state.mjs';
 /** `fields`: other fields of the document, each by pointer, to a value. */
 export const FIELDS = objects({ pointer: str({ required: true }), equals: json({ required: true }) });
 
+/** Where `expect.init` and `expect.doctor` take a substitution: `{{release}}` in a `fields` entry's `equals`. */
+export const FIELDS_SUBSTITUTE = Object.freeze({ 'fields.equals': ['release'] });
+
+/** An expected value with `{{release}}` filled in, in a string or in a list of them. @param {unknown} v @param {string} release */
+export const withRelease = (v, release) => (typeof v === 'string' ? v.replaceAll('{{release}}', release) : Array.isArray(v) ? v.map((x) => withRelease(x, release)) : v);
+
 /** The arguments `expect.init` and `expect.doctor` share. @param {string[]} statuses */
 export const documentArgs = (statuses) => ({
   status: str({ enum: statuses }),
@@ -45,9 +51,10 @@ export const UNCHECKED = strs({ items: { pattern: CHECK, hint: 'a doctor check\'
 /**
  * The problems of a kept document against an expectation. With `allowed` (doctor's), every
  * `unchecked` check the scenario doesn't list fails it, so "incomplete" never passes for "healthy".
- * @param {{ exit: number, document: any }} kept @param {any} step @param {string[] | null} allowed
+ * A `fields` entry's `equals` has `{{release}}` filled in with `release`, the release under test.
+ * @param {{ exit: number, document: any }} kept @param {any} step @param {string[] | null} allowed @param {string} release
  */
-export const documentProblems = ({ exit, document: doc }, step, allowed) => {
+export const documentProblems = ({ exit, document: doc }, step, allowed, release) => {
   const p = [];
   if (step.status !== undefined) p.push(differs('status', step.status, doc.status));
   if (step.exitCode !== undefined && (exit !== step.exitCode || doc.exitCode !== step.exitCode)) {
@@ -56,7 +63,8 @@ export const documentProblems = ({ exit, document: doc }, step, allowed) => {
   const ids = (doc.findings ?? []).map((/** @type {any} */ f) => f.id);
   for (const id of step.findings ?? []) if (!ids.includes(id)) p.push(`finding \`${id}\`: not reported`);
   for (const id of step.absent ?? []) if (ids.includes(id)) p.push(`finding \`${id}\`: reported`);
-  for (const { pointer, equals } of step.fields ?? []) {
+  for (const { pointer, equals: expected } of step.fields ?? []) {
+    const equals = withRelease(expected, release);
     const v = at(doc, pointer);
     p.push(v.found ? (same(v.value, equals) ? null : differs(`\`${pointer}\``, equals, v.value)) : `\`${pointer}\`: not in the document`);
   }

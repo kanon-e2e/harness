@@ -42,7 +42,7 @@ export default {
     equals: json({ required: true }),
   },
   check: (/** @type {any} */ step) => [...(pathProblem(step.path) ? [/** @type {string} */ (pathProblem(step.path))] : []), ...pointerProblems(step.pointer), ...equalsProblems(step.equals)],
-  /** The one place a substitution may sit in steps.json. */
+  /** `{{repository}}`, in its path alone (`expect.init` and `expect.doctor` take `{{release}}` in `fields`). */
   substitutes: { path: ['repository'] },
   /** @param {any} step @param {any} ctx */
   async run(step, ctx) {

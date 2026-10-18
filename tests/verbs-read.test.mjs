@@ -59,12 +59,33 @@ describe('expect.doctor', () => {
   it('refuses without a kept document', async () => {
     await expect(run('expect.doctor', {}, context())).rejects.toThrow(/no kept `kanon doctor` document/);
   });
+
+  it('fills {{release}} in a `fields` entry\'s equals with the release under test before comparing', async () => {
+    const doc = { ...PROBE_19, releases: { pins: [RELEASE], pinned: RELEASE } };
+    const fields = [{ pointer: '/releases/pins', equals: ['{{release}}'] }, { pointer: '/releases/pinned', equals: '{{release}}' }];
+    await run('expect.doctor', { status: 'incomplete', exitCode: 4, unchecked: ['secrets'], fields }, context({ state: doctor(doc) }));
+  });
+
+  it('fails when {{release}} is expected and the document pins another release, or a second one beside it', async () => {
+    const fields = [{ pointer: '/releases/pins', equals: ['{{release}}'] }, { pointer: '/releases/pinned', equals: '{{release}}' }];
+    const other = { ...PROBE_19, releases: { pins: ['v0.40.0'], pinned: 'v0.40.0' } };
+    await expect(run('expect.doctor', { unchecked: ['secrets'], fields }, context({ state: doctor(other) })))
+      .rejects.toMatchObject(failsWith(new RegExp(`/releases/pins.*${RELEASE}.*v0\\.40\\.0.*/releases/pinned`, 's')));
+    const two = { ...PROBE_19, releases: { pins: ['v0.40.0', RELEASE], pinned: RELEASE } };
+    await expect(run('expect.doctor', { unchecked: ['secrets'], fields }, context({ state: doctor(two) }))).rejects.toMatchObject(failsWith(/\/releases\/pins/));
+  });
 });
 
 describe('expect.init', () => {
   it('holds the kept document to a status, an exit code and finding ids present and absent', async () => {
     await run('expect.init', { status: 'steps-left', exitCode: 0, findings: ['label.create'], absent: ['app.failed'], fields: [{ pointer: '/pin', equals: RELEASE }] }, context({ state: init() }));
     await expect(run('expect.init', { status: 'complete', findings: ['app.failed'] }, context({ state: init() }))).rejects.toMatchObject(failsWith(/status.*app\.failed/s));
+  });
+
+  it('fills {{release}} in a `fields` entry\'s equals: the document pinning the release under test passes, another fails', async () => {
+    await run('expect.init', { status: 'steps-left', fields: [{ pointer: '/pin', equals: '{{release}}' }] }, context({ state: init() }));
+    await expect(run('expect.init', { fields: [{ pointer: '/pin', equals: '{{release}}' }] }, context({ state: init({ ...INIT, pin: 'v0.41.0' }) })))
+      .rejects.toMatchObject(failsWith(new RegExp(`/pin.*${RELEASE}.*v0\\.41\\.0`)));
   });
 
   it('never reads a finding\'s message: only its id', async () => {

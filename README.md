@@ -43,7 +43,7 @@ scenarios/<scenario>/
 
 A verb that waits takes a `deadline` in minutes, and polls. [`scenarios/README.md`](scenarios/README.md) lists every verb: what it does, its arguments, and whether it waits.
 
-**Expectations read fields, finding ids and known markers, never prose** (§4.3). An expectation names only a JSON field (by name or pointer), a finding id, or a marker from the harness's list of known markers, and compares it to a value. No expectation takes free text to match, and no expectation reads a field that holds free text, such as a finding's `message` or a comment's `body`. The list of known markers is [`runner/known-markers.json`](runner/known-markers.json): only markers Kanon already writes for its own reasons, such as the release-PR guard's `<!-- kanon-release-pr-guard … -->` and the Reviewer's role marker. `expect.api` reads only the scenario repository's own API, a path under `repos/{{repository}}/`.
+**Expectations read fields, finding ids and known markers, never prose** (§4.3). An expectation names only a JSON field (by name or pointer), a finding id, or a marker from the harness's list of known markers, and compares it to a value. No expectation takes free text to match, and no expectation reads a field that holds free text, such as a finding's `message` or a comment's `body`. The list of known markers is [`runner/known-markers.json`](runner/known-markers.json): only markers Kanon already writes for its own reasons, such as the release-PR guard's `<!-- kanon-release-pr-guard … -->` and the Reviewer's role marker. `expect.api` reads only the scenario repository's own API, a path under `repos/{{repository}}/`. `steps.json` takes two substitutions, each in one place: `{{repository}}` in `expect.api`'s path, and `{{release}}` in a `fields` entry's `equals` of `expect.init` and `expect.doctor`, so an expectation can say "pinned to the release under test".
 
 **Adding a verb.** A scenario that needs a verb the vocabulary lacks adds it in a pull request, with its unit test against a stubbed `gh`:
 
@@ -70,6 +70,19 @@ The approval differs by trigger. On a candidate's run, the scenario files the Ow
 
 ```sh
 gh workflow run e2e.yml -R kanon-e2e/harness -f release=v0.40.2 -f select=deploy-rehearsal
+```
+
+**The install family** (plan 0012 step E6, family `install`, no model, `gate: false` until burn-in). Four scenarios install Kanon into a fresh repository the way an adopter does: `kanon init` for one feature at the release under test, the App register, one push of what `init` wrote, then what `init` leaves to a person (the labels, the bucket milestones, the ruleset), `apps-check`, and the ruleset's `Lane check` rule once `ci.yml`'s push run reports it. Each holds `init`'s document to `steps-left` with the four findings the harness applies in a person's place. It holds `apps-check` to `success` for every App it lists, and `Lane check` to `success`. Doctor, on the `kanon` job's read-only token, must then read `incomplete` with exit code 4 and only `secrets` unchecked: nothing blocking. Each is pinned to the release under test: `init`'s `/pin`, doctor's `/releases/pinned` and every ref in `/releases/pins` must be it, and only it. Run them at the newest unpromoted candidate or at a stable release: a promoted candidate's `init` pins the stable tag instead, and they fail.
+
+- **`install-review`** ([`install-review/`](scenarios/install-review/README.md)). The **Review** feature, from an empty tree, with the Judge.
+- **`install-build`** ([`install-build/`](scenarios/install-build/README.md)). The **Review + build** feature, from an empty tree, with the Author and the Judge.
+- **`install-full`** ([`install-full/`](scenarios/install-full/README.md)). The **Full pipeline**, from an empty tree, with the Author and the Judge. Its scheduled lanes can fire while the repository lives.
+- **`install-python`** ([`install-python/`](scenarios/install-python/README.md)). The **Review + build** feature into Kanon's Python fixture project (`pyproject.toml`, `src/`, `tests/` and its `project-setup` hook, taken at `candidate-v0.41.0`), with the Author and the Judge.
+
+Dispatch the family:
+
+```sh
+gh workflow run e2e.yml -R kanon-e2e/harness -f release=<candidate> -f select=install
 ```
 
 ## Runs
@@ -105,6 +118,7 @@ gh workflow run e2e.yml -R kanon-e2e/harness -f release=v0.40.2 -f select=deploy
 - `tests/vocabulary.test.mjs` holds the vocabulary to plan 0012 §4.2: the closed set, each verb's segment kind, the deadline and backoff of every verb that waits, Kanon's code run only through `npx` at the release, the known markers, and the two tables of verbs.
 - `tests/verbs-kanon.test.mjs`, `tests/verbs-act.test.mjs` and `tests/verbs-read.test.mjs` test each verb on a stubbed `gh`, `npx` and `git`.
 - `tests/deploy-rehearsal.test.mjs` holds `scenarios/deploy-rehearsal/` to its issue's acceptance criteria (#26). Those are its three releases and what each expects, the environments and the tag ruleset before the first, production's wait, the run's job names, and every `deploy.*` finding held absent.
+- `tests/install-scenarios.test.mjs` holds the four install scenarios to their issue's acceptance criteria (#41): each `scenario.json`, the order of the steps, what each expectation holds, every pin held to `{{release}}`, and what `install-python`'s `start/` took from Kanon's fixture and left out.
 - `tests/workflows.test.mjs` holds the harness's workflows to plan 0012 §5.2: no job that holds an App key runs someone else's code, each environment is named only by the jobs §5.2 lists and the probes, no `-job` workflow names a private key, no workflow runs on a pull-request event with a secret, other than those Kanon's own lane callers map by name into their lane, and `e2e.yml`'s `verdict` holds `issues: write` through its workflow token and no key.
 - `tests/e2e-workflows.test.mjs` holds `e2e.yml` and its pairs to plan 0012 §5.2: the jobs, their order and conditions, each pair's mint and token, the read-only `kanon` token, an `act` job that runs no Kanon code, and every matrix's max-parallel and every job's timeout held to `runner/settings.json`.
 - `tests/runner.test.mjs` tests the runner a segment at a time on a stubbed `gh` and `npx` and a real `git`, each `git` call stubbable: pass, fail and infra, the retries of `gh` and `git`, the state, and how the repository ends.
