@@ -12,7 +12,7 @@
 //
 //   node runner/verdict.mjs   (reads START_RESULT, SCENARIOS, RESULTS_DIR; writes OUT/verdict.json)
 
-import { appendFileSync, lstatSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
@@ -47,8 +47,25 @@ export function judge({ planned, results, startResult }) {
   return { schema: VERDICT_SCHEMA, verdict, reason, scenarios };
 }
 
-/** Each result under `dir`, one artifact directory each, as `download-artifact` lays them. @param {string} dir */
+/** A `result.json`, or null. @param {string} path */
+const readResult = (path) => {
+  try {
+    return JSON.parse(readFileSync(path, 'utf8'));
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * Each result under `dir`, as `download-artifact`'s `pattern:` lays them (harness #30): several
+ * matched artifacts, one directory each, named for the artifact; exactly one, in `dir` itself.
+ * Several: a result counts only for the scenario its artifact's name gives. One: the name isn't on
+ * disk, so its `result.json` counts for the scenario it gives, and nothing else in it counts. An
+ * `act` job uploads `kanon-e2e-result-<scenario>` holding only that file, both from its own input.
+ * @param {string} dir
+ */
 const readResults = (dir) => {
+  if (existsSync(join(dir, 'result.json'))) return [readResult(join(dir, 'result.json'))].filter(Boolean);
   let names = [];
   try {
     names = readdirSync(dir);
@@ -56,12 +73,8 @@ const readResults = (dir) => {
     return [];
   }
   return names.filter((n) => n.startsWith(PREFIX) && lstatSync(join(dir, n)).isDirectory()).flatMap((n) => {
-    try {
-      const r = JSON.parse(readFileSync(join(dir, n, 'result.json'), 'utf8'));
-      return r?.scenario === n.slice(PREFIX.length) ? [r] : [];
-    } catch {
-      return [];
-    }
+    const r = readResult(join(dir, n, 'result.json'));
+    return r?.scenario === n.slice(PREFIX.length) ? [r] : [];
   });
 };
 
