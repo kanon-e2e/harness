@@ -218,3 +218,40 @@ describe('expect.api', () => {
     expect(g.calls).toEqual([]);
   });
 });
+
+describe('issue.await', () => {
+  const ISSUES = `GET repos/${REPO}/issues?state=all&per_page=100`;
+  const issue = (number, login, labels, pr = false) => ({ number, user: { login }, labels: labels.map((name) => ({ name })), ...(pr ? { pull_request: {} } : {}) });
+
+  it('waits for an issue by an App\'s slug with every label, and keeps the newest under its name', async () => {
+    const g = stubGh({
+      [ISSUES]: inTurn([[]], [[
+        issue(7, 'github-actions[bot]', ['bug', 'sev:medium']),
+        issue(6, 'github-actions[bot]', ['bug', 'sev:medium'], true),
+        issue(5, 'github-actions[bot]', ['bug', 'sev:medium']),
+        issue(8, 'github-actions[bot]', ['bug']),
+        issue(9, 'kanon-e2e-author[bot]', ['bug', 'sev:medium']),
+      ]]),
+    });
+    const ctx = context({ gh: g.gh });
+    await run('issue.await', { name: 'staging-failed', author: 'github-actions', labels: ['bug', 'sev:medium'], deadline: 5 }, ctx);
+    expect(ctx.state.issues).toEqual({ 'staging-failed': 7 });
+    expect(g.writes()).toEqual([]);
+  });
+
+  it('never takes a pull request for an issue', async () => {
+    const g = stubGh({ [ISSUES]: [[issue(6, 'github-actions[bot]', ['bug'], true)]] });
+    await expect(run('issue.await', { name: 'x', author: 'github-actions', deadline: 1 }, context({ gh: g.gh })))
+      .rejects.toMatchObject(failsWith(/github-actions\[bot\]/));
+  });
+
+  it('fails at the deadline, naming what it waited for', async () => {
+    const g = stubGh({ [ISSUES]: [[issue(5, 'someone', ['bug', 'sev:medium'])]] });
+    await expect(run('issue.await', { name: 'x', author: 'github-actions', labels: ['bug', 'sev:medium'], deadline: 1 }, context({ gh: g.gh })))
+      .rejects.toMatchObject(failsWith(/bug, sev:medium/));
+  });
+
+  it('takes no title or body to match: an App\'s slug and labels alone (§4.3)', () => {
+    expect(Object.keys(VOCABULARY['issue.await'].args).sort()).toEqual(['author', 'labels', 'name']);
+  });
+});

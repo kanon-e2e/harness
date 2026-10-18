@@ -11,12 +11,13 @@ import { fakeClock } from './helpers/stubs.mjs';
  * Kanon's code run only at the release under test, fetched as an adopter fetches it.
  */
 
-/** §4.2's table, with `repo.apply` (decision 23 (b)). */
+/** §4.2's table, with `repo.apply` (decision 23 (b)), and the deploy rehearsal's three (E5). */
 const PLAN = [
   'kanon.init', 'repo.apply', 'kanon.doctor', 'kanon.at', 'register.write', 'pins.move', 'files.commit',
   'pr.open', 'pr.label', 'pr.merge', 'issue.open', 'issue.label', 'workflow.dispatch', 'release.cut',
   'deployment.await-approval', 'run.await', 'expect.init', 'expect.doctor', 'expect.run', 'expect.check',
   'expect.issue', 'expect.pr', 'expect.artifact', 'expect.api',
+  'environment.create', 'ruleset.tags', 'issue.await',
 ];
 
 const verbs = Object.values(VOCABULARY);
@@ -47,13 +48,14 @@ describe('each verb belongs to one kind of segment (§4.2)', () => {
     expect(PLAN.filter((v) => kindOf(v) === 'kanon').sort()).toEqual(['kanon.at', 'kanon.doctor', 'kanon.init', 'pins.move', 'register.write']);
   });
 
-  it('the expect.* and run.await verbs only read: either segment', () => {
-    expect(PLAN.filter((v) => kindOf(v) === 'read').sort()).toEqual(PLAN.filter((v) => v.startsWith('expect.') || v === 'run.await').sort());
+  it('the expect.*, run.await and issue.await verbs only read: either segment', () => {
+    expect(PLAN.filter((v) => kindOf(v) === 'read').sort()).toEqual(PLAN.filter((v) => v.startsWith('expect.') || v === 'run.await' || v === 'issue.await').sort());
   });
 
   it('every other verb writes to GitHub with the harness\'s code, repo.apply included: act segments only', () => {
     expect(PLAN.filter((v) => kindOf(v) === 'act').sort()).toEqual(
-      ['repo.apply', 'files.commit', 'pr.open', 'pr.label', 'pr.merge', 'issue.open', 'issue.label', 'workflow.dispatch', 'release.cut', 'deployment.await-approval'].sort());
+      ['repo.apply', 'files.commit', 'pr.open', 'pr.label', 'pr.merge', 'issue.open', 'issue.label', 'workflow.dispatch', 'release.cut', 'deployment.await-approval',
+        'environment.create', 'ruleset.tags'].sort());
   });
 
   it('no verb outside a kanon segment runs Kanon\'s code: no npx, no Kanon module', () => {
@@ -68,7 +70,7 @@ describe('every verb that waits takes a deadline, and polls (§10)', () => {
   it('the waiting verbs', () => {
     expect(verbs.filter((v) => v.waits).map((v) => v.verb).sort()).toEqual([
       'deployment.await-approval', 'expect.api', 'expect.artifact', 'expect.check', 'expect.issue', 'expect.pr',
-      'expect.run', 'pr.merge', 'release.cut', 'run.await',
+      'expect.run', 'issue.await', 'pr.merge', 'release.cut', 'run.await',
     ]);
   });
 

@@ -1,0 +1,73 @@
+{
+  "phases": [
+    {
+      "kanon": [
+        { "verb": "kanon.init", "flags": ["--feature=review", "--review-trigger=labelled", "--no-sensitive-data", "--deploy-environments=staging,production"] }
+      ],
+      "act": [
+        { "verb": "files.commit", "from": "kanon", "message": "Install Kanon, with the deploy lane for staging then production" },
+        { "verb": "repo.apply" },
+        { "verb": "environment.create", "name": "staging", "tags": "v*.*.*" },
+        { "verb": "environment.create", "name": "production", "tags": "v*.*.*", "reviewer": true },
+        { "verb": "ruleset.tags", "pattern": "v*.*.*", "bypass": ["releaser"] },
+        { "verb": "files.commit", "from": "scenario", "dir": "release-1", "branch": "release-1", "message": "feat: the first release" },
+        { "verb": "pr.open", "name": "release-1", "head": "release-1", "title": "feat: the first release", "body": "The deploy rehearsal's first release: it deploys to staging, and waits for production's reviewer." },
+        { "verb": "pr.merge", "pr": "release-1", "via": "front-door", "deadline": 10 },
+        { "verb": "release.cut", "deadline": 15 }
+      ]
+    },
+    {
+      "kanon": [],
+      "act": [
+        { "verb": "deployment.await-approval", "environment": "production", "workflow": "deploy.yml", "deadline": 25 },
+        { "verb": "run.await", "name": "release-1", "workflow": "deploy.yml", "event": "release", "branch": "main", "deadline": 10 },
+        { "verb": "expect.run", "run": "release-1", "deadline": 2, "jobs": [
+          { "name": "release / gate", "conclusion": "success" },
+          { "name": "release / probe", "conclusion": "success" },
+          { "name": "release / build", "conclusion": "success" },
+          { "name": "release / record", "conclusion": "success" },
+          { "name": "release / report", "conclusion": "success" },
+          { "name": "staging / deploy", "conclusion": "success" },
+          { "name": "staging / record", "conclusion": "success" },
+          { "name": "staging / report", "conclusion": "success" },
+          { "name": "production / record", "conclusion": "success" },
+          { "name": "production / report", "conclusion": "success" }
+        ] }
+      ]
+    },
+    {
+      "kanon": [
+        { "verb": "kanon.doctor" },
+        { "verb": "expect.doctor", "unchecked": ["secrets", "deploy-secrets"], "absent": [
+          "deploy.admin-bypass", "deploy.artifact-retention", "deploy.branch-policy", "deploy.caller-mismatch",
+          "deploy.ci-push-missing", "deploy.declaration", "deploy.declaration-moved", "deploy.environment-missing",
+          "deploy.hook-missing", "deploy.reference-undeclared", "deploy.releaser-missing", "deploy.reviewers-missing",
+          "deploy.secret-organization", "deploy.secret-repository", "deploy.self-review", "deploy.subject-custom",
+          "deploy.tag-ruleset", "deploy.trust-unproven"
+        ] }
+      ],
+      "act": [
+        { "verb": "files.commit", "from": "scenario", "dir": "smoke-fails", "branch": "smoke-fails", "message": "fix: a smoke check that fails" },
+        { "verb": "pr.open", "name": "smoke-fails", "head": "smoke-fails", "title": "fix: a smoke check that fails", "body": "The deploy rehearsal's second release: its smoke check fails in staging." },
+        { "verb": "pr.merge", "pr": "smoke-fails", "via": "front-door", "deadline": 10 },
+        { "verb": "release.cut", "deadline": 15 },
+        { "verb": "run.await", "name": "release-2", "workflow": "deploy.yml", "event": "release", "branch": "main", "deadline": 15 },
+        { "verb": "expect.run", "run": "release-2", "conclusion": "failure", "deadline": 2, "jobs": [
+          { "name": "release / gate", "conclusion": "success" },
+          { "name": "release / probe", "conclusion": "success" },
+          { "name": "release / build", "conclusion": "success" },
+          { "name": "staging / deploy", "conclusion": "failure" },
+          { "name": "staging / record", "conclusion": "success" },
+          { "name": "staging / report", "conclusion": "success" }
+        ] },
+        { "verb": "issue.await", "name": "staging-failed", "author": "github-actions", "labels": ["bug", "sev:medium"], "deadline": 5 },
+        { "verb": "expect.issue", "issue": "staging-failed", "state": "open", "labels": ["bug", "sev:medium"], "author": "github-actions", "deadline": 2 },
+        { "verb": "files.commit", "from": "scenario", "dir": "smoke-passes", "branch": "smoke-passes", "message": "fix: the smoke check passes again" },
+        { "verb": "pr.open", "name": "smoke-passes", "head": "smoke-passes", "title": "fix: the smoke check passes again", "body": "The deploy rehearsal's third release: staging succeeds, which closes its issue." },
+        { "verb": "pr.merge", "pr": "smoke-passes", "via": "front-door", "deadline": 10 },
+        { "verb": "release.cut", "deadline": 15 },
+        { "verb": "expect.issue", "issue": "staging-failed", "state": "closed", "deadline": 20 }
+      ]
+    }
+  ]
+}

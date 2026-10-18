@@ -339,6 +339,8 @@ const EVERY_VERB = {
       act: [
         { verb: 'files.commit', from: 'kanon', message: 'Install Kanon' },
         { verb: 'repo.apply' },
+        { verb: 'environment.create', name: 'production', tags: 'v*.*.*', reviewer: true },
+        { verb: 'ruleset.tags', pattern: 'v*.*.*', bypass: ['releaser'] },
         { verb: 'files.commit', from: 'scenario', dir: 'files/fix', branch: 'docs', message: 'docs: a line', delete: ['docs/old.md'] },
         { verb: 'pr.open', name: 'docs', head: 'docs', title: 'docs: a line', body: 'One line.' },
         { verb: 'pr.label', pr: 'docs', add: ['review:please'] },
@@ -364,6 +366,8 @@ const EVERY_VERB = {
         { verb: 'release.cut', deadline: 30 },
         { verb: 'expect.pr', pr: 'release', state: 'merged', author: 'kanon-e2e-releaser', deadline: 5 },
         { verb: 'deployment.await-approval', environment: 'production', workflow: 'deploy.yml', deadline: 30 },
+        { verb: 'issue.await', name: 'deploy-failed', author: 'github-actions', labels: ['bug'], deadline: 20 },
+        { verb: 'expect.issue', issue: 'deploy-failed', state: 'open', deadline: 5 },
         { verb: 'expect.api', path: 'repos/{{repository}}/rulesets', pointer: '/0/name', equals: 'Kanon: default branch', deadline: 5 },
       ],
     },
