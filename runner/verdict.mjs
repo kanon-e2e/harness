@@ -235,7 +235,7 @@ export async function give(input, { gh, log = () => {} }) {
   try {
     const runs = `${red ? `${runsOf(String(red.issue.body))}\n\n` : ''}${runSection(v, byId, run)}`;
     if (v.verdict !== 'pass') {
-      const body = redBody({ release, candidateSha: input.candidateSha, failSeen: red?.marker?.failSeen === true || v.own === 'fail', runs });
+      const body = redBody({ release, candidateSha: input.candidateSha, failSeen: v.own === 'fail', runs });
       const issue = red
         ? await api(ctx, `repos/${H}/issues/${red.issue.number}`, { method: 'PATCH', body: { body } })
         : await api(ctx, `repos/${H}/issues`, { method: 'POST', body: { title: redTitle(release), body } });
