@@ -7,6 +7,10 @@
 //                `ruleset.create` (step 8);
 //   second call: `ruleset.require-check`, the ruleset's required `Lane check` rule, once the
 //                pushed callers are on the default branch and a job there reports it.
+//
+// `init`'s read-only token can't see the merge settings, so it names no `merge.settings`; the
+// `provision` job sets them, as the release under test's guard checks them, before the first
+// push (e2e.yml, #36).
 
 import { BUCKETS, CHECK_RULE, LANE_CHECK, MERGE_SETTINGS, RULESET_NAME, isLabelTemplate, rulesetBody } from '../lib/adopt.mjs';
 import { api, repoPath } from '../lib/gh.mjs';

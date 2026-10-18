@@ -5,7 +5,11 @@
 // Kanon's surfaces as doctor's `ruleset.missing` or `ruleset.rule-missing`, or a missing label;
 // doctor checks neither the milestones nor the merge settings (plan 0012 §11).
 
-/** `K-ADOPT-1` step 5 (`K-SHIP-3`): squash merge only, the pull request's title and body as the commit's. */
+/**
+ * `K-ADOPT-1` step 5 (`K-SHIP-3`): squash merge only, the pull request's title and body as the
+ * commit's, for `merge.settings`. `provision` sets them before this, from the release's own guard
+ * (e2e.yml); tests/merge-settings.test.mjs holds this copy to Kanon's guard where it has one.
+ */
 export const MERGE_SETTINGS = Object.freeze({
   allow_squash_merge: true,
   allow_merge_commit: false,
