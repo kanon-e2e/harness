@@ -199,7 +199,7 @@ export async function give(input, { gh, log = () => {} }) {
   }
 
   const red = issues.map((i) => ({ issue: i, marker: readMarker(i.body, RED) })).find((x) => x.marker?.candidate === release) ?? null;
-  const v = judge({ trigger, planned, results, startResult, held: red?.marker?.failSeen === true ? { url: red.issue.html_url } : null });
+  const v = judge({ trigger, planned, results, startResult, held: null });
   const byId = new Map(results.filter(readable).map((r) => [r.scenario, r]));
 
   /** @type {string | null} */
@@ -235,7 +235,7 @@ export async function give(input, { gh, log = () => {} }) {
   try {
     const runs = `${red ? `${runsOf(String(red.issue.body))}\n\n` : ''}${runSection(v, byId, run)}`;
     if (v.verdict !== 'pass') {
-      const body = redBody({ release, candidateSha: input.candidateSha, failSeen: v.own === 'fail', runs });
+      const body = redBody({ release, candidateSha: input.candidateSha, failSeen: red?.marker?.failSeen === true || v.own === 'fail', runs });
       const issue = red
         ? await api(ctx, `repos/${H}/issues/${red.issue.number}`, { method: 'PATCH', body: { body } })
         : await api(ctx, `repos/${H}/issues`, { method: 'POST', body: { title: redTitle(release), body } });
