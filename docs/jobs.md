@@ -42,7 +42,7 @@ What `e2e.yml` runs, which job holds which secret, and how big a run may be ([Ka
 | `fail` | An expectation was false, a step's or the scenario's deadline passed, the artifact was refused, or the harness's own code went wrong. | Kept 24 hours, topic `kanon-e2e-failed`, then archived (decision 13). |
 | `infra` | GitHub failed past the retries, a token expired, the repository wasn't provisioned or is gone, or the state didn't arrive. | Deleted. |
 
-A call that fails on a 5xx, a rate limit or a network error is retried three times, after 2, 4 and 8 seconds, or a minute on a rate limit. A false expectation is never retried: it is the finding. The result is set once, and a later phase can't change it. The `act` job that learns the result ends the repository and uploads `kanon-e2e-result-<scenario>`. The janitor deletes what a dead run left.
+A call to GitHub, by `gh` or by `git`'s clone, fetch, push and ls-remote, that fails on a 5xx, a rate limit or a network error is retried three times, after 2, 4 and 8 seconds, or a minute on a rate limit. A false expectation is never retried: it is the finding. The result is set once, and a later phase can't change it. The `act` job that learns the result ends the repository and uploads `kanon-e2e-result-<scenario>`. The janitor deletes what a dead run left.
 
 ## The sizing
 

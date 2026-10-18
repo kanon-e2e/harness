@@ -26,7 +26,7 @@ import { takeAsData } from './lib/artifact.mjs';
 import { Fail } from './lib/fail.mjs';
 import { GhError, api } from './lib/gh.mjs';
 import { exec as realExec, ghProcess } from './lib/proc.mjs';
-import { classify, infra, retrying } from './lib/retry.mjs';
+import { classify, infra, retrying, retryingExec } from './lib/retry.mjs';
 import { SETTINGS } from './sizing.mjs';
 import { SUBSTITUTIONS, loadScenario } from './validate.mjs';
 import { IDENTITY } from './verbs/files-commit.mjs';
@@ -126,6 +126,7 @@ export async function runSegment(a, deps) {
   const { scenario, steps } = loadScenario(a.scenarioDir);
   const log = deps.log ?? ((/** @type {string} */ l) => console.log(l));
   const gh = retrying(deps.gh, deps);
+  const exec = retryingExec(deps.exec, deps);
   const ghCtx = { gh, repository: a.repository };
   const phases = steps.phases;
   const last = a.phase >= phases.length;
@@ -193,7 +194,7 @@ export async function runSegment(a, deps) {
   const values = { release: a.release, repository: a.repository };
   const clone = join(a.work, 'clone');
   const git = async (/** @type {string[]} */ args, cwd = clone) => {
-    const r = await deps.exec('git', args, { cwd });
+    const r = await exec('git', args, { cwd });
     if (r.status !== 0) throw Object.assign(new Error(`git ${args.find((x) => !x.startsWith('-') && !x.includes('=')) ?? args[0]} exited ${r.status}: ${String(r.stderr).trim()}`), { stderr: r.stderr });
     return r;
   };
@@ -209,7 +210,7 @@ export async function runSegment(a, deps) {
           kanonFiles = takeAsData(a.artifactDir);
         }
         await git(['clone', '-q', a.remote, clone], a.work);
-        const empty = (await deps.exec('git', ['rev-parse', '--verify', '-q', 'HEAD'], { cwd: clone })).status !== 0;
+        const empty = (await exec('git', ['rev-parse', '--verify', '-q', 'HEAD'], { cwd: clone })).status !== 0;
         if (empty) {
           await git(['symbolic-ref', 'HEAD', `refs/heads/${defaultBranch}`]);
           layStart(join(a.scenarioDir, 'start'), clone, values);
@@ -232,7 +233,7 @@ export async function runSegment(a, deps) {
     // THE STEPS, in order; the first that throws ends the scenario, and the rest are skipped.
     const ctx = {
       repository: a.repository, release: a.release, harness: a.harness, trigger: a.trigger, defaultBranch,
-      scenario, scenarioDir: a.scenarioDir, clone, kanonFiles, state, gh, exec: deps.exec, now: deps.now, sleep: deps.sleep,
+      scenario, scenarioDir: a.scenarioDir, clone, kanonFiles, state, gh, exec, now: deps.now, sleep: deps.sleep,
     };
     const list = phases[a.phase - 1]?.[a.segment] ?? [];
     for (const [index, step] of list.entries()) {
@@ -252,7 +253,7 @@ export async function runSegment(a, deps) {
     }
 
     if (a.segment === 'act' && existsSync(join(clone, '.git'))) {
-      const r = await deps.exec('git', ['ls-remote', 'origin', `refs/heads/${defaultBranch}`], { cwd: clone });
+      const r = await exec('git', ['ls-remote', 'origin', `refs/heads/${defaultBranch}`], { cwd: clone });
       const sha = String(r.stdout).split(/\s/)[0];
       if (/^[0-9a-f]{40}$/.test(sha)) state.ref = sha;
     }

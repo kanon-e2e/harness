@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, symlinkSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { classify } from '../runner/lib/retry.mjs';
 import { VOCABULARY } from '../runner/vocabulary.mjs';
 import { REPO, RELEASE, context, fail, inTurn, stubExec, stubGh, tempDir, writeTree } from './helpers/stubs.mjs';
 
@@ -158,6 +159,22 @@ describe('files.commit', () => {
   it('fails when git does', async () => {
     const x = stubExec([[(c) => c.args.includes('push'), () => ({ status: 1, stderr: 'rejected' })]]);
     await expect(run('files.commit', { delete: ['a'], message: 'm' }, context({ exec: x.exec, clone: tempDir() }))).rejects.toThrow(/git push.*rejected/);
+  });
+
+  it('a git failure carries git\'s stderr, so the runner reads a transport error `infra` and a rejected push `fail`', async () => {
+    const outcome = async (sub, r) => {
+      const x = stubExec([[(c) => c.args.includes(sub), () => r]]);
+      return classify(await run('files.commit', { delete: ['a'], branch: 'docs', message: 'm' }, context({ exec: x.exec, clone: tempDir() })).then(() => null, (e) => e));
+    };
+    const badGateway = { status: 128, stderr: "fatal: unable to access 'https://github.com/o/r.git/': The requested URL returned error: 502" };
+    for (const sub of ['fetch', 'ls-remote', 'push']) expect(await outcome(sub, badGateway), sub).toBe('infra');
+    expect(await outcome('push', { status: 1, stderr: ' ! [rejected]        HEAD -> docs (non-fast-forward)' })).toBe('fail');
+  });
+
+  it('a branch whose ls-remote fails is not taken for a new one: only `--exit-code`\'s 2 says it is missing', async () => {
+    const x = stubExec([[(c) => c.args.includes('ls-remote'), () => ({ status: 128, stderr: 'fatal: Could not resolve host: github.com' })]]);
+    await expect(run('files.commit', { delete: ['a'], branch: 'docs', message: 'm' }, context({ exec: x.exec, clone: tempDir() }))).rejects.toThrow(/git ls-remote exited 128/);
+    expect(git(x)).not.toContain('checkout -q -B docs origin/main');
   });
 });
 
