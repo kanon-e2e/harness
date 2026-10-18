@@ -32,14 +32,14 @@ import { loadScenario, scenarioDirs } from './validate.mjs';
 
 const K = `repos/${SETTINGS.kanon}`;
 const H = `repos/${SETTINGS.harness}`;
-const CANDIDATE = /^candidate-v(\d+)\.(\d+)\.(\d+)$/;
-const STABLE = /^v(\d+)\.(\d+)\.(\d+)$/;
-const MARKER = /^e2e-(nightly|candidate|dispatch)-/;
+export const CANDIDATE = /^candidate-v(\d+)\.(\d+)\.(\d+)$/;
+export const STABLE = /^v(\d+)\.(\d+)\.(\d+)$/;
+export const MARKER = /^e2e-(nightly|candidate|dispatch)-/;
 
 /** A tag's version, for comparison. @param {string} tag */
 const version = (tag) => tag.replace(/^candidate-v|^v/, '').split('.').map(Number);
 /** @param {string} a @param {string} b */
-const newer = (a, b) => {
+export const newer = (a, b) => {
   const [x, y] = [version(a), version(b)];
   return x[0] - y[0] || x[1] - y[1] || x[2] - y[2];
 };

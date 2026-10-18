@@ -26,7 +26,7 @@ scenarios/<scenario>/
 | `id` | The directory's name: lowercase, digits and hyphens, at most 40 characters. |
 | `family` | `lane`, `install`, `doctor`, `upgrade` or `deploy`. |
 | `tier` | `none` or `model`. |
-| `gate` | Whether it counts toward the release gate, a boolean. A new scenario starts `false`, and turns `true` after ten consecutive scheduled passes. |
+| `gate` | Whether it counts toward the release gate, a boolean. A new scenario starts `false`, and turns `true` after its burn-in: ten passes in a row ([Runs](#runs)). |
 | `apps` | The test Apps the scenario repository gets: any of `author`, `judge`, `releaser`. |
 | `claude` | `none` or `subscription`: whether the scenario repository needs the real-model token. |
 | `deadlineMinutes` | The whole scenario's deadline, at most 120. |
@@ -56,7 +56,7 @@ Everything under `runner/`, the verbs, the validator and the known markers inclu
 
 ## The catalogue
 
-Each scenario's own README says what it sets up, what each step expects, what it creates and costs, and what a red result usually means.
+Each scenario's own README says what it sets up, what each step expects, what it creates and costs, and what a red result usually means. Each entry here shows its `gate` value, which the pull request that turns it `true` updates.
 
 **`deploy-rehearsal`** ([`scenarios/deploy-rehearsal/`](scenarios/deploy-rehearsal/README.md), family `deploy`, no model, `gate: false`). Kanon's deploy lane, end to end, in a repository with `staging` then `production`. It repeats plan 0010's D12 rehearsal, done once by hand at v0.40.0, on every candidate and every nightly. It cuts three releases:
 
@@ -74,10 +74,10 @@ gh workflow run e2e.yml -R kanon-e2e/harness -f release=v0.40.2 -f select=deploy
 
 **The install family** (plan 0012 step E6, family `install`, no model, `gate: false` until burn-in). Four scenarios install Kanon into a fresh repository the way an adopter does: `kanon init` for one feature at the release under test, the App register, one push of what `init` wrote, then what `init` leaves to a person (the labels, the bucket milestones, the ruleset), `apps-check`, and the ruleset's `Lane check` rule once `ci.yml`'s push run reports it. Each holds `init`'s document to `steps-left` with the four findings the harness applies in a person's place. It holds `apps-check` to `success` for every App it lists, and `Lane check` to `success`. Doctor, on the `kanon` job's read-only token, must then read `incomplete` with exit code 4 and only `secrets` unchecked: nothing blocking. Each is pinned to the release under test: `init`'s `/pin`, doctor's `/releases/pinned` and every ref in `/releases/pins` must be it, and only it. Run them at the newest unpromoted candidate or at a stable release: a promoted candidate's `init` pins the stable tag instead, and they fail.
 
-- **`install-review`** ([`install-review/`](scenarios/install-review/README.md)). The **Review** feature, from an empty tree, with the Judge.
-- **`install-build`** ([`install-build/`](scenarios/install-build/README.md)). The **Review + build** feature, from an empty tree, with the Author and the Judge.
-- **`install-full`** ([`install-full/`](scenarios/install-full/README.md)). The **Full pipeline**, from an empty tree, with the Author and the Judge. Its scheduled lanes can fire while the repository lives.
-- **`install-python`** ([`install-python/`](scenarios/install-python/README.md)). The **Review + build** feature into Kanon's Python fixture project (`pyproject.toml`, `src/`, `tests/` and its `project-setup` hook, taken at `candidate-v0.41.0`), with the Author and the Judge.
+- **`install-review`** ([`install-review/`](scenarios/install-review/README.md), `gate: false`). The **Review** feature, from an empty tree, with the Judge.
+- **`install-build`** ([`install-build/`](scenarios/install-build/README.md), `gate: false`). The **Review + build** feature, from an empty tree, with the Author and the Judge.
+- **`install-full`** ([`install-full/`](scenarios/install-full/README.md), `gate: false`). The **Full pipeline**, from an empty tree, with the Author and the Judge. Its scheduled lanes can fire while the repository lives.
+- **`install-python`** ([`install-python/`](scenarios/install-python/README.md), `gate: false`). The **Review + build** feature into Kanon's Python fixture project (`pyproject.toml`, `src/`, `tests/` and its `project-setup` hook, taken at `candidate-v0.41.0`), with the Author and the Judge.
 
 Dispatch the family:
 
@@ -96,6 +96,13 @@ gh workflow run e2e.yml -R kanon-e2e/harness -f release=<candidate> -f select=in
 **Pass, fail, infra.** A scenario reads `fail` when an expectation was false, or a deadline passed. Its repository is kept 24 hours, archived, with the `kanon-e2e-failed` topic, for a person to look at. It reads `infra` when GitHub, a token, or the harness's own preconditions failed: no finding about Kanon, and never a pass. It reads `skipped` when the runner refused to start it, with the reason in `skipped`: `budget` from the real-model ledger (E10). The hourly janitor deletes whatever a run left behind.
 
 **The gate rule** (plan 0012 §8.2). `verdict` decides over the scenarios that count. On a candidate's run, those are the scenarios with `gate: true`, read from the catalogue at the run's commit, never from a result. A `gate: false` scenario is listed in the summary with its result, and changes nothing. On a nightly or a dispatch, every planned scenario counts. The verdict is `pass` only when every scenario that counts passed. It is `fail` when one read `fail` or `skipped`, and `infra-only` when nothing failed but one read `infra` or left no result. A candidate's run with no `gate: true` scenario is `fail`, "no scenario gates yet", never green on nothing. A candidate's check run completes `success`, `failure` or `neutral` to match, and the poll re-runs a `neutral` one after an hour. Kanon's gate reads the check run, and the `verdict` job's own conclusion, never the run's: [`docs/jobs.md`](docs/jobs.md#what-kanons-gate-reads) lists what it reads, and how.
+
+**Burn-in** (§10, the Owner's rule of 2026-10-18). A new scenario starts `gate: false`, so it can't block a release. It earns `gate: true` with ten passes in a row, counted over the runs of `e2e.yml` on `main`, oldest first, from its last change to its `steps.json` or `start/`:
+
+- A run that planned the scenario against a candidate, or against the latest stable release when it started, counts one more pass when the scenario read `pass`, whatever started it: the poll, the nightly or a dispatch. Any other result breaks the run of passes: `fail`, `infra`, `skipped`, or no result at all.
+- A run whose `plan` stopped (it gave way, was held, or another run was in flight) neither counts nor breaks. Nor does a run that didn't plan the scenario, a run against an older stable release, or a run before the change.
+
+`node runner/burn-in.mjs <scenario>` reads those runs' markers and results from their artifacts, and Kanon's releases, through `gh`. It prints a Markdown table of every run that counts or breaks, then the current run of passes, and exits 0 at ten or more, else 1. It writes nothing and holds no key, but it needs a token: an artifact's download answers `401` without one. Each scenario turns `true` in its own pull request, which changes only its `scenario.json` and its entry above, and holds that table as it printed. A scenario that gates is never set aside: while it is broken, releases wait until it is fixed.
 
 **The red issue** (§8.3). Only a candidate's run reads or writes it, and only `verdict` does, with the workflow's own token. A nightly or a dispatch writes only its summary.
 
@@ -124,6 +131,7 @@ gh workflow run e2e.yml -R kanon-e2e/harness -f release=<candidate> -f select=in
 - `tests/runner.test.mjs` tests the runner a segment at a time on a stubbed `gh` and `npx` and a real `git`, each `git` call stubbable: pass, fail and infra, the retries of `gh` and `git`, the state, and how the repository ends.
 - `tests/artifact.test.mjs` holds the `act` job to taking the `kanon` job's tree as data: a hostile tree runs nothing, reads nothing outside it, and pushes nothing.
 - `tests/plan.test.mjs` tests `plan`'s decisions: the poll, the nightly, the dispatch, and one run at a time.
+- `tests/burn-in.test.mjs` tests `runner/burn-in.mjs`'s count on a stubbed `gh`: what counts, what breaks, and what does neither, such as a run that gave way or one against an older stable release.
 - `tests/verdict-report.test.mjs` holds `verdict` and `report` to plan 0012 §8.2 and §8.3 (#40), on fixtures. It covers: the gating scenarios on a candidate's run and every scenario elsewhere; `gate` read from `plan`, never from a result; `skipped: budget` failing the gate; "no scenario gates yet". It holds the red issue's filing, editing and closing by its marker, a quoted marker that never passes for one, a green run that never closes a `fail` and answers `fail` while one is open, and the `the Reporter can't post` issue. It holds `verdict.json`'s fields and the exit status, and `report`'s conclusion, its summary's links, and its retry. It also holds what Kanon's gate reads: the check run's fields and `start`'s name.
 - `tests/sizing.test.mjs` and `tests/janitor.test.mjs` hold the sizing and the janitor's cut-offs to `runner/settings.json`, and the janitor to deleting only what it may.
 - `tests/telemetry.test.mjs` holds the harness's collector caller and its `sent with evidence` choice, and holds the runner, the scenarios and the `e2e*.yml` workflows to passing no `kanon init` flag that turns telemetry or sharing on, and to installing no collector.
