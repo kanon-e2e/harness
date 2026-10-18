@@ -371,6 +371,16 @@ describe('environment.create', () => {
     expect(g.writes().map((c) => c.key)).toEqual([`PUT repos/${REPO}/environments/staging`]);
   });
 
+  it('takes a branch rule of the same pattern for no tag rule', async () => {
+    const g = stubGh({
+      [`PUT repos/${REPO}/environments/staging`]: {},
+      [`GET repos/${REPO}/environments/staging/deployment-branch-policies?per_page=100`]: { total_count: 1, branch_policies: [{ name: 'v*.*.*', type: 'branch' }] },
+      [`POST repos/${REPO}/environments/staging/deployment-branch-policies`]: {},
+    });
+    await run('environment.create', { name: 'staging', tags: 'v*.*.*' }, context({ gh: g.gh }));
+    expect(g.writes().at(-1)).toMatchObject({ key: `POST repos/${REPO}/environments/staging/deployment-branch-policies`, body: { name: 'v*.*.*', type: 'tag' } });
+  });
+
   it('reads the reviewer\'s login from runner/settings.json, not from the scenario', () => {
     const settings = JSON.parse(readFileSync(new URL('../runner/settings.json', import.meta.url), 'utf8'));
     expect(settings.environmentReviewer).toBe('yedeya');
