@@ -57,10 +57,16 @@ describe('the poll (§7, decision 19)', () => {
     const out = await poll(world());
     expect(out).toMatchObject({ go: true, trigger: 'candidate', release: 'candidate-v0.42.0', candidateSha: SHA, marker: 'e2e-candidate-candidate-v0.42.0' });
     expect(out.scenarios).toEqual([
-      { id: 'deploy-rehearsal', apps: ['releaser'], claude: 'none' },
-      { id: 'install-review', apps: ['author', 'judge'], claude: 'none' },
+      { id: 'deploy-rehearsal', apps: ['releaser'], claude: 'none', gate: false },
+      { id: 'install-review', apps: ['author', 'judge'], claude: 'none', gate: false },
     ]);
     expect(out.modelScenarios).toEqual([]);
+  });
+
+  it('carries each scenario\'s `gate` from the catalogue at the run\'s commit, for `verdict` (E8)', async () => {
+    const catalogue = CATALOGUE.map((s) => (s.id === 'install-review' ? { ...s, gate: true } : s));
+    const out = await plan({ event: 'schedule', schedule: POLL, catalogue }, world());
+    expect(out.scenarios.map((s) => [s.id, s.gate])).toEqual([['deploy-rehearsal', false], ['install-review', true]]);
   });
 
   it('skips a candidate whose Reporter check run is `in_progress`, `success` or `failure`', async () => {
@@ -172,7 +178,7 @@ describe('the dispatch (§7)', () => {
     const out = await dispatch('candidate-v0.42.0', world({ checks: [check('completed', 'failure', 10)], candidateRuns: [1, 2, 3, 4, 5, 6] }));
     expect(out).toMatchObject({ go: true, trigger: 'candidate', candidateSha: SHA, marker: 'e2e-candidate-candidate-v0.42.0' });
     expect(out.scenarios.map((s) => s.id)).toEqual(['deploy-rehearsal', 'install-review', 'review-real']);
-    expect(out.modelScenarios).toEqual([{ id: 'review-real', apps: ['author', 'judge'], claude: 'subscription' }]);
+    expect(out.modelScenarios).toEqual([{ id: 'review-real', apps: ['author', 'judge'], claude: 'subscription', gate: false }]);
   });
 
   it('a dispatch of a scenario or a family runs just those, and posts no check run', async () => {

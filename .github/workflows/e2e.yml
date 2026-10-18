@@ -86,8 +86,12 @@ jobs:
           if-no-files-found: error
           retention-days: 90
 
+  # THE NAME RECORDS THE CANDIDATE (E8, #40): its tag and full commit, for Kanon's gate to read
+  # from the run's public jobs list without a credential, beside the `verdict` job's conclusion.
+  # Job names come from this file on `main`, so no code under test can change them (docs/jobs.md,
+  # "What Kanon's gate reads").
   start:
-    name: start (the Reporter's check run)
+    name: "start (the Reporter's check run: ${{ needs.plan.outputs.release }} at ${{ needs.plan.outputs.candidate-sha }})"
     needs: plan
     if: ${{ needs.plan.outputs.go == 'true' && needs.plan.outputs.trigger == 'candidate' }}
     runs-on: ubuntu-24.04
@@ -398,8 +402,10 @@ jobs:
       DRIVER_APP_ID: ${{ secrets.DRIVER_APP_ID }}
       DRIVER_APP_KEY: ${{ secrets.DRIVER_APP_KEY }}
 
-  # Reads each scenario's result, and exits non-zero unless every scenario passed. The issues it
-  # files and the gate's reading are E8's.
+  # Reads each scenario's result, and exits non-zero unless the scenarios that count passed: on a
+  # candidate's run those with `gate: true`, elsewhere every planned one. On a candidate's run it
+  # files, edits or closes the candidate's red issue and the `the Reporter can't post` issue, with
+  # the workflow's own token (`issues: write`), and holds no key (runner/verdict.mjs, E8).
   verdict:
     name: verdict
     needs: [plan, start, provision, model-key, kanon-1, act-1, kanon-2, act-2, kanon-3, act-3]
@@ -408,6 +414,7 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: read
+      issues: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -423,6 +430,10 @@ jobs:
           path: ${{ runner.temp }}/results
       - name: Give the verdict
         env:
+          GH_TOKEN: ${{ github.token }}
+          TRIGGER: ${{ needs.plan.outputs.trigger }}
+          RELEASE: ${{ needs.plan.outputs.release }}
+          CANDIDATE_SHA: ${{ needs.plan.outputs.candidate-sha }}
           START_RESULT: ${{ needs.start.result }}
           SCENARIOS: ${{ needs.plan.outputs.scenarios }}
           RESULTS_DIR: ${{ runner.temp }}/results
@@ -439,7 +450,7 @@ jobs:
 
   # Completes the check run `start` created, whatever happened between: pass is success, fail is
   # failure, and anything else (infra-only, no verdict, one that can't be read) is neutral, which
-  # the poll re-runs after an hour.
+  # the poll re-runs after an hour. Its summary links this run and the candidate's red issue.
   report:
     name: report (the check run's conclusion)
     needs: [plan, start, verdict]
@@ -460,10 +471,14 @@ jobs:
         run: |
           file="$RUNNER_TEMP/verdict/verdict.json"
           verdict=none
+          issue=
           if [ -f "$file" ]; then
             verdict=$(jq -r 'if type == "object" and (.verdict | type) == "string" then .verdict else "unreadable" end' "$file" 2>/dev/null || echo unreadable)
+            issue=$(jq -r 'if type == "object" and (.redIssue | type) == "string" then .redIssue else "" end' "$file" 2>/dev/null || true)
           fi
-          if ! printf %s "$verdict" | grep -Eqx '[a-z-]{1,20}'; then verdict=unreadable; fi
+          # Whole-string matches: a value with a newline in it is refused, so it can't add an output.
+          if ! [[ $verdict =~ ^[a-z-]{1,20}$ ]]; then verdict=unreadable; fi
+          if ! [[ $issue =~ ^https://github\.com/kanon-e2e/harness/issues/[0-9]{1,10}$ ]]; then issue=; fi
           case "$verdict" in
             pass) conclusion=success ;;
             fail) conclusion=failure ;;
@@ -471,7 +486,8 @@ jobs:
           esac
           echo "conclusion=$conclusion" >> "$GITHUB_OUTPUT"
           echo "verdict=$verdict" >> "$GITHUB_OUTPUT"
-          echo "verdict: $verdict; conclusion: $conclusion"
+          echo "issue=$issue" >> "$GITHUB_OUTPUT"
+          echo "verdict: $verdict; conclusion: $conclusion; red issue: ${issue:-none}"
       - name: Mint the Reporter's token (checks write on Kanon)
         id: reporter
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
@@ -487,11 +503,21 @@ jobs:
           ID: ${{ needs.start.outputs.check-run }}
           CONCLUSION: ${{ steps.verdict.outputs.conclusion }}
           VERDICT: ${{ steps.verdict.outputs.verdict }}
+          ISSUE: ${{ steps.verdict.outputs.issue }}
           RELEASE: ${{ needs.plan.outputs.release }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
-          gh api -X PATCH "repos/yedeya-labs/kanon/check-runs/$ID" -f status=completed -f conclusion="$CONCLUSION" \
-            -f "output[title]=Kanon e2e: $RELEASE, $VERDICT" \
-            -f "output[summary]=The end-to-end tier's verdict on $RELEASE is $VERDICT ($RUN_URL)." >/dev/null
-          echo "Completed the check run $ID: $CONCLUSION ($VERDICT)."
+          summary="The end-to-end tier's verdict on \`$RELEASE\` is **$VERDICT**: [the run, attempt $GITHUB_RUN_ATTEMPT]($RUN_URL)."
+          if [ -n "$ISSUE" ]; then summary="$summary The red issue: [$ISSUE]($ISSUE)."; fi
+          # A 5xx or a network error is retried, so the check run isn't left in_progress.
+          for try in 1 2 3; do
+            if gh api -X PATCH "repos/yedeya-labs/kanon/check-runs/$ID" -f status=completed -f conclusion="$CONCLUSION" \
+              -f "output[title]=Kanon e2e: $RELEASE, $VERDICT" -f "output[summary]=$summary" >/dev/null; then
+              echo "Completed the check run $ID: $CONCLUSION ($VERDICT)."
+              exit 0
+            fi
+            [ "$try" = 3 ] || sleep $((try * 10))
+          done
+          echo "::error title=report::could not complete the check run $ID after three tries"
+          exit 1

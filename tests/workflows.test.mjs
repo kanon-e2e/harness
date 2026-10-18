@@ -179,6 +179,22 @@ describe('no `-job` workflow names a private key', () => {
   });
 });
 
+describe('`e2e.yml`\'s `verdict` files issues with its workflow token, and holds no key (E8, #40)', () => {
+  const verdict = docs['e2e.yml'].jobs.verdict;
+
+  it('has `issues: write` on this repository and `contents: read`, nothing more', () => {
+    expect(verdict.permissions).toEqual({ contents: 'read', issues: 'write' });
+  });
+
+  it('its only token is the workflow\'s own: no environment, no secret, no key, no App token', () => {
+    expect(environmentOf(verdict)).toBeUndefined();
+    expect(holdsKey(verdict)).toBe(false);
+    expect(SECRET.test(JSON.stringify(verdict))).toBe(false);
+    expect(verdict.steps.filter((s) => String(s.uses ?? '').startsWith('actions/create-github-app-token'))).toEqual([]);
+    expect(verdict.steps.flatMap((s) => Object.entries(s.env ?? {})).filter(([, v]) => /token/i.test(String(v)))).toEqual([['GH_TOKEN', '${{ github.token }}']]);
+  });
+});
+
 describe('no workflow runs on `pull_request`, `pull_request_target` or `merge_group` with a secret', () => {
   it('finds the workflows it is about, so the check is not vacuous', () => {
     const onPr = files.filter((f) => eventsOf(docs[f]).some((e) => PR_EVENTS.includes(e)));
