@@ -51,8 +51,8 @@ const latest = (releases) => {
   return { stable: top(STABLE), candidate: top(CANDIDATE) };
 };
 
-/** What a scenario job takes of a scenario. @param {any} s */
-const entry = (s) => ({ id: s.id, apps: s.apps, claude: s.claude });
+/** What a scenario job takes of a scenario, and `verdict` its `gate`, from the catalogue at the run's commit. @param {any} s */
+const entry = (s) => ({ id: s.id, apps: s.apps, claude: s.claude, gate: s.gate === true });
 
 /** @typedef {{ go: boolean, trigger: string, release: string, candidateSha: string, scenarios: any[], modelScenarios: any[], marker: string, reason: string }} Decision */
 
