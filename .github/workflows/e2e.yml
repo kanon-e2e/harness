@@ -200,6 +200,49 @@ jobs:
             printf %s "${!key_var}" | gh secret set "${upper}_APP_PRIVATE_KEY" -R "$ORG/$REPO_NAME"
             echo "Wrote ${upper}_APP_ID and ${upper}_APP_PRIVATE_KEY."
           done
+      # K-ADOPT-1 step 5 (K-SHIP-3), before anything reaches the default branch: the first push
+      # lays start/, and Kanon's release.yml stops at its merge-settings guard without them.
+      # `kanon init`'s read-only token can't see them, so it names no `merge.settings` for
+      # `repo.apply` (#36). The values are the ones the release under test's guard checks, read
+      # from its release.yml as data: only merge fields, only booleans and constants; anything
+      # else, or no guard at all, stops `provision`.
+      - name: Set the merge settings the release's guard checks (K-ADOPT-1 step 5)
+        env:
+          GH_TOKEN: ${{ steps.repo.outputs.token }}
+          RELEASE: ${{ needs.plan.outputs.release }}
+        run: |
+          set -euo pipefail
+          if ! guard=$(gh api "repos/yedeya-labs/kanon/contents/.github/workflows/release.yml?ref=$RELEASE" -H 'Accept: application/vnd.github.raw+json'); then
+            echo "::error title=provision::could not read $RELEASE's .github/workflows/release.yml for its merge-settings guard"
+            exit 1
+          fi
+          block=$(printf '%s\n' "$guard" | sed -n '/const expected = {/,/};/p' | sed '1d;$d')
+          field="^[[:space:]]*([a-z_]+):[[:space:]]*(true|false|'([A-Z_]+)'),?[[:space:]]*\$"
+          merging='^(allow_(squash_merge|merge_commit|rebase_merge)|(squash_)?merge_commit_(title|message))$'
+          args=() want=()
+          while IFS= read -r line; do
+            [ -z "${line//[[:space:]]/}" ] && continue
+            key='' value='' constant=''
+            if [[ $line =~ $field ]]; then key=${BASH_REMATCH[1]} value=${BASH_REMATCH[2]} constant=${BASH_REMATCH[3]}; fi
+            if ! [[ $key =~ $merging ]]; then
+              echo "::error title=provision::$RELEASE's merge-settings guard checks what provision can't set: ${line#"${line%%[![:space:]]*}"}"
+              exit 1
+            fi
+            if [ -n "$constant" ]; then value=$constant; args+=(-f "$key=$value"); else args+=(-F "$key=$value"); fi
+            want+=("$key=$value")
+          done <<< "$block"
+          if [ "${#want[@]}" = 0 ]; then
+            echo "::error title=provision::found no merge settings in $RELEASE's merge-settings guard (const expected = { ... } in release.yml)"
+            exit 1
+          fi
+          have=$(gh api -X PATCH "repos/$ORG/$REPO_NAME" "${args[@]}" --jq 'to_entries[] | "\(.key)=\(.value)"')
+          for w in "${want[@]}"; do
+            if ! grep -qxF -- "$w" <<< "$have"; then
+              echo "::error title=provision::GitHub didn't keep $w on $REPO_NAME"
+              exit 1
+            fi
+          done
+          echo "Set ${want[*]}, as $RELEASE's guard checks them."
       - name: Mark the repository provisioned
         env:
           GH_TOKEN: ${{ steps.repo.outputs.token }}
