@@ -1,0 +1,454 @@
+# The end-to-end run (Kanon plan 0012 §5.1, §5.2, §7; harness #16). One run tests one release of
+# Kanon against the scenario catalogue, each scenario in a fresh public repository of the test
+# organisation, created and deleted by the run.
+#
+# TRIGGERS (§7): the poll, every 15 minutes, for a candidate with no Reporter check run; the
+# nightly, once a day, when Kanon's main moved; and a dispatch, for an exact release. Never a
+# pull request: a run spends the organisation's minutes and its Apps' keys, and the code under
+# test is Kanon's release, not this repository's change.
+#
+# ONE RUN AT A TIME (the Owner, 2026-10-17): `plan` stops a run while another run's marker is in
+# flight, before any repository is created. The concurrency group below only keeps the poll's
+# runs from piling up; `plan` holds the rest (runner/plan.mjs).
+#
+# THE JOBS (§5.2): plan → start (a candidate's run: the Reporter's check run, in_progress) →
+# provision (each scenario's repository, its Apps' secrets, its topics) → model-key (a
+# `claude: subscription` scenario's token) → kanon-1, act-1, kanon-2, act-2, kanon-3, act-3 (each
+# a pair: a `mint` job that holds the driver's key and a job handed only the token) → verdict →
+# report (the check run's conclusion). docs/jobs.md says which job holds which secret, and why.
+name: e2e
+
+on:
+  schedule:
+    # The poll (decision 19), and the nightly (decision 4), off the poll's minutes. Both strings
+    # are runner/settings.json's `schedules`, which `plan` reads to tell them apart.
+    - cron: "*/15 * * * *"
+    - cron: "7 3 * * *"
+  workflow_dispatch:
+    inputs:
+      release:
+        description: An exact Kanon release, vX.Y.Z or candidate-vX.Y.Z
+        required: true
+        type: string
+      select:
+        description: One scenario's id or one family; empty runs the whole catalogue (for a candidate, that is a candidate's run, with its check run)
+        required: false
+        type: string
+        default: ""
+
+permissions: {}
+
+concurrency:
+  group: e2e-${{ inputs.release || github.event.schedule }}
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    name: plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      go: ${{ steps.plan.outputs.go }}
+      trigger: ${{ steps.plan.outputs.trigger }}
+      release: ${{ steps.plan.outputs.release }}
+      candidate-sha: ${{ steps.plan.outputs.candidate-sha }}
+      scenarios: ${{ steps.plan.outputs.scenarios }}
+      model-scenarios: ${{ steps.plan.outputs.model-scenarios }}
+      marker: ${{ steps.plan.outputs.marker }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      - name: Decide the run
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          SCHEDULE: ${{ github.event.schedule }}
+          RELEASE: ${{ inputs.release }}
+          SELECT: ${{ inputs.select }}
+          MARKER_DIR: ${{ runner.temp }}/marker
+        run: node runner/plan.mjs
+      # THE MARKER: this run is in flight, for every other run's `plan`; and, for a candidate,
+      # one of its six runs; for a nightly, the main head it ran.
+      - name: Record the run's marker
+        if: steps.plan.outputs.go == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ steps.plan.outputs.marker }}
+          path: ${{ runner.temp }}/marker/marker.json
+          if-no-files-found: error
+          retention-days: 90
+
+  start:
+    name: start (the Reporter's check run)
+    needs: plan
+    if: ${{ needs.plan.outputs.go == 'true' && needs.plan.outputs.trigger == 'candidate' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    environment: e2e-report
+    permissions: {}
+    outputs:
+      check-run: ${{ steps.create.outputs.id }}
+    steps:
+      - name: Mint the Reporter's token (checks write on Kanon)
+        id: reporter
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ secrets.REPORTER_APP_ID }}
+          private-key: ${{ secrets.REPORTER_APP_KEY }}
+          owner: yedeya-labs
+          repositories: kanon
+          permission-checks: write
+      - name: Create the check run, in_progress
+        id: create
+        env:
+          GH_TOKEN: ${{ steps.reporter.outputs.token }}
+          SHA: ${{ needs.plan.outputs.candidate-sha }}
+          RELEASE: ${{ needs.plan.outputs.release }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          id=$(gh api -X POST repos/yedeya-labs/kanon/check-runs -f name=kanon-e2e -f head_sha="$SHA" -f status=in_progress \
+            -f external_id="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" -f details_url="$RUN_URL" \
+            -f "output[title]=Kanon e2e: $RELEASE" -f "output[summary]=The end-to-end tier is running against $RELEASE ($RUN_URL)." --jq .id)
+          echo "id=$id" >> "$GITHUB_OUTPUT"
+          echo "Created the check run $id on $SHA."
+
+  provision:
+    name: provision (${{ matrix.scenario.id }})
+    needs: [plan, start]
+    if: ${{ !cancelled() && needs.start.result != 'failure' && needs.plan.outputs.go == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: e2e
+    permissions: {}
+    strategy:
+      fail-fast: false
+      max-parallel: 2 # maxParallel() in runner/sizing.mjs, from runner/settings.json
+      matrix:
+        scenario: ${{ fromJSON(needs.plan.outputs.scenarios) }}
+    env:
+      ORG: kanon-e2e
+      REPO_NAME: e2e-${{ matrix.scenario.id }}-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - name: Mint the driver's organisation token (Administration write)
+        id: org
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ secrets.DRIVER_APP_ID }}
+          private-key: ${{ secrets.DRIVER_APP_KEY }}
+          owner: kanon-e2e
+          permission-administration: write
+      - name: Create the public repository, empty, with the kanon-e2e topic
+        env:
+          GH_TOKEN: ${{ steps.org.outputs.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          for try in 1 2 3; do
+            if gh api -X POST "orgs/$ORG/repos" -f name="$REPO_NAME" -F private=false -F auto_init=false \
+              -f description="Kanon e2e scenario; the run $RUN_URL deletes it" >/dev/null; then break; fi
+            [ "$try" = 3 ] && exit 1
+            sleep $((try * 5))
+          done
+          # The janitor deletes only what carries the topic: without it, the repository goes now.
+          if ! gh api -X PUT "repos/$ORG/$REPO_NAME/topics" -f 'names[]=kanon-e2e' >/dev/null; then
+            gh api -X DELETE "repos/$ORG/$REPO_NAME" >/dev/null || true
+            echo "::error title=provision::could not mark $REPO_NAME with the kanon-e2e topic; deleted it"
+            exit 1
+          fi
+          echo "Created $ORG/$REPO_NAME."
+      - name: Mint a token scoped to the new repository (Secrets write)
+        id: repo
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ secrets.DRIVER_APP_ID }}
+          private-key: ${{ secrets.DRIVER_APP_KEY }}
+          owner: kanon-e2e
+          repositories: ${{ env.REPO_NAME }}
+          permission-secrets: write
+          permission-administration: write
+      # Each test App the scenario lists, under the names Kanon's callers map (`<APP>_APP_ID`,
+      # `<APP>_APP_PRIVATE_KEY`); an App it doesn't list is never written.
+      - name: Write the scenario's test Apps' secrets
+        env:
+          GH_TOKEN: ${{ steps.repo.outputs.token }}
+          APPS: ${{ join(matrix.scenario.apps, ' ') }}
+          AUTHOR_ID: ${{ contains(matrix.scenario.apps, 'author') && secrets.AUTHOR_APP_ID || '' }}
+          AUTHOR_KEY: ${{ contains(matrix.scenario.apps, 'author') && secrets.AUTHOR_APP_KEY || '' }}
+          JUDGE_ID: ${{ contains(matrix.scenario.apps, 'judge') && secrets.JUDGE_APP_ID || '' }}
+          JUDGE_KEY: ${{ contains(matrix.scenario.apps, 'judge') && secrets.JUDGE_APP_KEY || '' }}
+          RELEASER_ID: ${{ contains(matrix.scenario.apps, 'releaser') && secrets.RELEASER_APP_ID || '' }}
+          RELEASER_KEY: ${{ contains(matrix.scenario.apps, 'releaser') && secrets.RELEASER_APP_KEY || '' }}
+        run: |
+          set -euo pipefail
+          for app in $APPS; do
+            upper=$(printf %s "$app" | tr '[:lower:]' '[:upper:]')
+            id_var="${upper}_ID"; key_var="${upper}_KEY"
+            if [ -z "${!id_var}" ] || [ -z "${!key_var}" ]; then
+              echo "::error title=provision::the e2e environment lacks ${upper}_APP_ID or ${upper}_APP_KEY"
+              exit 1
+            fi
+            printf %s "${!id_var}" | gh secret set "${upper}_APP_ID" -R "$ORG/$REPO_NAME"
+            printf %s "${!key_var}" | gh secret set "${upper}_APP_PRIVATE_KEY" -R "$ORG/$REPO_NAME"
+            echo "Wrote ${upper}_APP_ID and ${upper}_APP_PRIVATE_KEY."
+          done
+      - name: Mark the repository provisioned
+        env:
+          GH_TOKEN: ${{ steps.repo.outputs.token }}
+        run: gh api -X PUT "repos/$ORG/$REPO_NAME/topics" -f 'names[]=kanon-e2e' -f 'names[]=kanon-e2e-provisioned' >/dev/null
+
+  model-key:
+    name: model-key (${{ matrix.scenario.id }})
+    needs: [plan, start, provision]
+    if: ${{ !cancelled() && needs.start.result != 'failure' && needs.plan.outputs.go == 'true' && needs.plan.outputs.model-scenarios != '[]' }}
+    permissions: {}
+    strategy:
+      fail-fast: false
+      max-parallel: 2 # maxParallel() in runner/sizing.mjs, from runner/settings.json
+      matrix:
+        scenario: ${{ fromJSON(needs.plan.outputs.model-scenarios) }}
+    uses: ./.github/workflows/e2e-model-key-run.yml
+    with:
+      repository-name: e2e-${{ matrix.scenario.id }}-${{ github.run_id }}-${{ github.run_attempt }}
+    secrets:
+      DRIVER_APP_ID: ${{ secrets.DRIVER_APP_ID }}
+      DRIVER_APP_KEY: ${{ secrets.DRIVER_APP_KEY }}
+      E2E_CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.E2E_CLAUDE_CODE_OAUTH_TOKEN }}
+
+  kanon-1:
+    name: kanon-1 (${{ matrix.scenario.id }})
+    needs: [plan, start, provision, model-key]
+    if: ${{ !cancelled() && needs.start.result != 'failure' && needs.plan.outputs.go == 'true' }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      max-parallel: 2 # maxParallel() in runner/sizing.mjs, from runner/settings.json
+      matrix:
+        scenario: ${{ fromJSON(needs.plan.outputs.scenarios) }}
+    uses: ./.github/workflows/e2e-kanon-run.yml
+    with:
+      scenario: ${{ matrix.scenario.id }}
+      phase: 1
+      release: ${{ needs.plan.outputs.release }}
+      trigger: ${{ needs.plan.outputs.trigger }}
+      repository-name: e2e-${{ matrix.scenario.id }}-${{ github.run_id }}-${{ github.run_attempt }}
+    secrets:
+      DRIVER_APP_ID: ${{ secrets.DRIVER_APP_ID }}
+      DRIVER_APP_KEY: ${{ secrets.DRIVER_APP_KEY }}
+
+  act-1:
+    name: act-1 (${{ matrix.scenario.id }})
+    needs: [plan, start, kanon-1]
+    if: ${{ !cancelled() && needs.start.result != 'failure' && needs.plan.outputs.go == 'true' }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      max-parallel: 2 # maxParallel() in runner/sizing.mjs, from runner/settings.json
+      matrix:
+        scenario: ${{ fromJSON(needs.plan.outputs.scenarios) }}
+    uses: ./.github/workflows/e2e-act-run.yml
+    with:
+      scenario: ${{ matrix.scenario.id }}
+      phase: 1
+      release: ${{ needs.plan.outputs.release }}
+      trigger: ${{ needs.plan.outputs.trigger }}
+      repository-name: e2e-${{ matrix.scenario.id }}-${{ github.run_id }}-${{ github.run_attempt }}
+    secrets:
+      DRIVER_APP_ID: ${{ secrets.DRIVER_APP_ID }}
+      DRIVER_APP_KEY: ${{ secrets.DRIVER_APP_KEY }}
+
+  kanon-2:
+    name: kanon-2 (${{ matrix.scenario.id }})
+    needs: [plan, start, act-1]
+    if: ${{ !cancelled() && needs.start.result != 'failure' && needs.plan.outputs.go == 'true' }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      max-parallel: 2 # maxParallel() in runner/sizing.mjs, from runner/settings.json
+      matrix:
+        scenario: ${{ fromJSON(needs.plan.outputs.scenarios) }}
+    uses: ./.github/workflows/e2e-kanon-run.yml
+    with:
+      scenario: ${{ matrix.scenario.id }}
+      phase: 2
+      release: ${{ needs.plan.outputs.release }}
+      trigger: ${{ needs.plan.outputs.trigger }}
+      repository-name: e2e-${{ matrix.scenario.id }}-${{ github.run_id }}-${{ github.run_attempt }}
+    secrets:
+      DRIVER_APP_ID: ${{ secrets.DRIVER_APP_ID }}
+      DRIVER_APP_KEY: ${{ secrets.DRIVER_APP_KEY }}
+
+  act-2:
+    name: act-2 (${{ matrix.scenario.id }})
+    needs: [plan, start, kanon-2]
+    if: ${{ !cancelled() && needs.start.result != 'failure' && needs.plan.outputs.go == 'true' }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      max-parallel: 2 # maxParallel() in runner/sizing.mjs, from runner/settings.json
+      matrix:
+        scenario: ${{ fromJSON(needs.plan.outputs.scenarios) }}
+    uses: ./.github/workflows/e2e-act-run.yml
+    with:
+      scenario: ${{ matrix.scenario.id }}
+      phase: 2
+      release: ${{ needs.plan.outputs.release }}
+      trigger: ${{ needs.plan.outputs.trigger }}
+      repository-name: e2e-${{ matrix.scenario.id }}-${{ github.run_id }}-${{ github.run_attempt }}
+    secrets:
+      DRIVER_APP_ID: ${{ secrets.DRIVER_APP_ID }}
+      DRIVER_APP_KEY: ${{ secrets.DRIVER_APP_KEY }}
+
+  kanon-3:
+    name: kanon-3 (${{ matrix.scenario.id }})
+    needs: [plan, start, act-2]
+    if: ${{ !cancelled() && needs.start.result != 'failure' && needs.plan.outputs.go == 'true' }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      max-parallel: 2 # maxParallel() in runner/sizing.mjs, from runner/settings.json
+      matrix:
+        scenario: ${{ fromJSON(needs.plan.outputs.scenarios) }}
+    uses: ./.github/workflows/e2e-kanon-run.yml
+    with:
+      scenario: ${{ matrix.scenario.id }}
+      phase: 3
+      release: ${{ needs.plan.outputs.release }}
+      trigger: ${{ needs.plan.outputs.trigger }}
+      repository-name: e2e-${{ matrix.scenario.id }}-${{ github.run_id }}-${{ github.run_attempt }}
+    secrets:
+      DRIVER_APP_ID: ${{ secrets.DRIVER_APP_ID }}
+      DRIVER_APP_KEY: ${{ secrets.DRIVER_APP_KEY }}
+
+  act-3:
+    name: act-3 (${{ matrix.scenario.id }})
+    needs: [plan, start, kanon-3]
+    if: ${{ !cancelled() && needs.start.result != 'failure' && needs.plan.outputs.go == 'true' }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      max-parallel: 2 # maxParallel() in runner/sizing.mjs, from runner/settings.json
+      matrix:
+        scenario: ${{ fromJSON(needs.plan.outputs.scenarios) }}
+    uses: ./.github/workflows/e2e-act-run.yml
+    with:
+      scenario: ${{ matrix.scenario.id }}
+      phase: 3
+      release: ${{ needs.plan.outputs.release }}
+      trigger: ${{ needs.plan.outputs.trigger }}
+      repository-name: e2e-${{ matrix.scenario.id }}-${{ github.run_id }}-${{ github.run_attempt }}
+    secrets:
+      DRIVER_APP_ID: ${{ secrets.DRIVER_APP_ID }}
+      DRIVER_APP_KEY: ${{ secrets.DRIVER_APP_KEY }}
+
+  # Reads each scenario's result, and exits non-zero unless every scenario passed. The issues it
+  # files and the gate's reading are E8's.
+  verdict:
+    name: verdict
+    needs: [plan, start, provision, model-key, kanon-1, act-1, kanon-2, act-2, kanon-3, act-3]
+    if: ${{ !cancelled() && needs.plan.outputs.go == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      - name: Download each scenario's result
+        continue-on-error: true
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: kanon-e2e-result-*
+          path: ${{ runner.temp }}/results
+      - name: Give the verdict
+        env:
+          START_RESULT: ${{ needs.start.result }}
+          SCENARIOS: ${{ needs.plan.outputs.scenarios }}
+          RESULTS_DIR: ${{ runner.temp }}/results
+          OUT: ${{ runner.temp }}/verdict
+        run: node runner/verdict.mjs
+      - name: Upload verdict.json
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: verdict
+          path: ${{ runner.temp }}/verdict/verdict.json
+          if-no-files-found: ignore
+          retention-days: 90
+
+  # Completes the check run `start` created, whatever happened between: pass is success, fail is
+  # failure, and anything else (infra-only, no verdict, one that can't be read) is neutral, which
+  # the poll re-runs after an hour.
+  report:
+    name: report (the check run's conclusion)
+    needs: [plan, start, verdict]
+    if: ${{ always() && needs.start.result == 'success' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    environment: e2e-report
+    permissions: {}
+    steps:
+      - name: Download verdict.json
+        continue-on-error: true
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: verdict
+          path: ${{ runner.temp }}/verdict
+      - name: Read the verdict
+        id: verdict
+        run: |
+          file="$RUNNER_TEMP/verdict/verdict.json"
+          verdict=none
+          if [ -f "$file" ]; then
+            verdict=$(jq -r 'if type == "object" and (.verdict | type) == "string" then .verdict else "unreadable" end' "$file" 2>/dev/null || echo unreadable)
+          fi
+          if ! printf %s "$verdict" | grep -Eqx '[a-z-]{1,20}'; then verdict=unreadable; fi
+          case "$verdict" in
+            pass) conclusion=success ;;
+            fail) conclusion=failure ;;
+            *) conclusion=neutral ;;
+          esac
+          echo "conclusion=$conclusion" >> "$GITHUB_OUTPUT"
+          echo "verdict=$verdict" >> "$GITHUB_OUTPUT"
+          echo "verdict: $verdict; conclusion: $conclusion"
+      - name: Mint the Reporter's token (checks write on Kanon)
+        id: reporter
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ secrets.REPORTER_APP_ID }}
+          private-key: ${{ secrets.REPORTER_APP_KEY }}
+          owner: yedeya-labs
+          repositories: kanon
+          permission-checks: write
+      - name: Complete the check run
+        env:
+          GH_TOKEN: ${{ steps.reporter.outputs.token }}
+          ID: ${{ needs.start.outputs.check-run }}
+          CONCLUSION: ${{ steps.verdict.outputs.conclusion }}
+          VERDICT: ${{ steps.verdict.outputs.verdict }}
+          RELEASE: ${{ needs.plan.outputs.release }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          gh api -X PATCH "repos/yedeya-labs/kanon/check-runs/$ID" -f status=completed -f conclusion="$CONCLUSION" \
+            -f "output[title]=Kanon e2e: $RELEASE, $VERDICT" \
+            -f "output[summary]=The end-to-end tier's verdict on $RELEASE is $VERDICT ($RUN_URL)." >/dev/null
+          echo "Completed the check run $ID: $CONCLUSION ($VERDICT)."

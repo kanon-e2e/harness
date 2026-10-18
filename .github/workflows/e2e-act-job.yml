@@ -1,0 +1,152 @@
+# e2e — an `act` job (Kanon plan 0012 §5.2; harness #16)
+#
+# CALLED ONLY BY `e2e-act-run.yml`, beside the job that mints its token. The driver's key never
+# enters this job: the token arrives hex-encoded as the `app-token` secret, scoped to the one
+# scenario repository. `Receive the App token` is the first step and `Revoke the App token` the
+# last, as in Kanon's spine.
+#
+# It runs the phase's `act` segment (runner/run.mjs), the harness's code only, never Kanon's. The
+# `kanon` job's tree arrives as an artifact into a scratch directory where nothing runs: no git,
+# no hook, no `core.fsmonitor`. The runner walks it with `lstat` and takes only regular files
+# (runner/lib/artifact.mjs); anything else refuses the artifact and the scenario reads `fail`.
+# Then it clones the repository itself, lays `start/` as the first commit on the first phase,
+# and runs the steps: pushing what Kanon wrote, `repo.apply`, pull requests, waits. The job that
+# learns the scenario's result ends the repository, and uploads `kanon-e2e-result-<scenario>`.
+name: e2e — an act job
+
+on:
+  workflow_call:
+    inputs:
+      scenario:
+        required: true
+        type: string
+      phase:
+        required: true
+        type: number
+      release:
+        required: true
+        type: string
+      trigger:
+        required: true
+        type: string
+      repository-name:
+        required: true
+        type: string
+      mint-attempt:
+        description: The run attempt the `mint` job minted the token for; a token of an earlier attempt was revoked when that attempt ended, and is refused by name.
+        required: true
+        type: string
+    secrets:
+      app-token:
+        description: The act token, hex-encoded by the `mint` job. Arrives masked, as every secret does.
+        required: true
+
+jobs:
+  act:
+    name: act segment
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - name: Receive the App token
+        id: app-token
+        env:
+          SEALED: ${{ secrets.app-token }}
+          MINT_ATTEMPT: ${{ inputs.mint-attempt }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          if [ -z "$SEALED" ] || ! printf %s "$SEALED" | grep -Eq '^([0-9a-f]{2})+$'; then
+            echo "::error title=app-token::no App token arrived from the mint job; see that job's log for why the mint failed."
+            exit 1
+          fi
+          if [ "$MINT_ATTEMPT" != "$RUN_ATTEMPT" ]; then
+            echo "::error title=app-token::this is attempt $RUN_ATTEMPT, but the App token was minted for attempt $MINT_ATTEMPT and revoked when that attempt ended. Use \"Re-run all jobs\"."
+            exit 1
+          fi
+          TOKEN="$(printf '%b' "$(printf %s "$SEALED" | sed 's/../\\x&/g')")"
+          echo "::add-mask::$TOKEN"
+          echo "token=$TOKEN" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+
+      # The same phase's state, from its `kanon` job. A missing one reads `infra`.
+      - name: Download the state
+        continue-on-error: true
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: e2e-state-${{ inputs.scenario }}-kanon-${{ inputs.phase }}
+          path: ${{ runner.temp }}/e2e/state-in
+
+      # THE KANON JOB'S TREE, INTO A SCRATCH DIRECTORY WHERE NOTHING RUNS. A missing one reads
+      # `infra` when the segment has steps to run.
+      - name: Download the kanon job's tree, as data
+        continue-on-error: true
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: e2e-tree-${{ inputs.scenario }}-kanon-${{ inputs.phase }}
+          path: ${{ runner.temp }}/e2e/scratch
+
+      - name: Run the act segment
+        id: run
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          SEGMENT: act
+          PHASE: ${{ inputs.phase }}
+          SCENARIO: ${{ inputs.scenario }}
+          RELEASE: ${{ inputs.release }}
+          TRIGGER: ${{ inputs.trigger }}
+          REPOSITORY_NAME: ${{ inputs.repository-name }}
+          STATE_DIR: ${{ runner.temp }}/e2e/state-in
+          STATE_ARTIFACT: e2e-state-${{ inputs.scenario }}-kanon-${{ inputs.phase }}
+          TREE_DIR: ${{ runner.temp }}/e2e/scratch
+          WORK: ${{ runner.temp }}/e2e/work
+          OUT: ${{ runner.temp }}/e2e/out
+        run: node runner/run.mjs
+
+      - name: Upload the state
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: e2e-state-${{ inputs.scenario }}-act-${{ inputs.phase }}
+          path: ${{ runner.temp }}/e2e/out/state.json
+          if-no-files-found: warn
+          retention-days: 3
+          overwrite: true
+
+      - name: Upload the scenario's result
+        if: ${{ always() && steps.run.outputs.finalized == 'true' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: kanon-e2e-result-${{ inputs.scenario }}
+          path: ${{ runner.temp }}/e2e/out/result.json
+          if-no-files-found: error
+          retention-days: 90
+          overwrite: true
+
+      # THE LAST STEP, `always()`: a job that ended early still revokes the token. Revoking needs
+      # only the token itself, never the key. Never reds the job.
+      - name: Revoke the App token
+        if: ${{ always() }}
+        env:
+          SEALED: ${{ secrets.app-token }}
+          MINT_ATTEMPT: ${{ inputs.mint-attempt }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          API_URL: ${{ github.api_url }}
+        run: |
+          if [ -z "$SEALED" ] || ! printf %s "$SEALED" | grep -Eq '^([0-9a-f]{2})+$' || [ "$MINT_ATTEMPT" != "$RUN_ATTEMPT" ]; then
+            echo "No App token of this attempt to revoke"
+            exit 0
+          fi
+          TOKEN="$(printf '%b' "$(printf %s "$SEALED" | sed 's/../\\x&/g')")"
+          echo "::add-mask::$TOKEN"
+          STATUS="$(curl -sS -o /dev/null -w '%{http_code}' -X DELETE \
+            -H "Authorization: Bearer $TOKEN" -H "Accept: application/vnd.github+json" \
+            "$API_URL/installation/token" || true)"
+          if [ "$STATUS" = "204" ]; then echo "App token revoked"; else echo "::warning title=app-token::the App token could not be revoked (HTTP ${STATUS:-none}); it expires within the hour"; fi

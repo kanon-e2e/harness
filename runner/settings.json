@@ -1,0 +1,46 @@
+{
+  "$comment": "The harness's settings (harness #16, Kanon plan 0012 §5.2, §5.3, §7). Each is a value the harness holds, not a constant in code: runner/sizing.mjs derives max-parallel, the longest running time, the catalogue's cap and the janitor's two cut-offs from them, and tests/workflows.test.mjs holds e2e.yml's max-parallel and every job's timeout-minutes to them. Change a value here and the tests name each place that must follow. `$sources` says where each measured value came from.",
+  "organisation": "kanon-e2e",
+  "harness": "kanon-e2e/harness",
+  "kanon": "yedeya-labs/kanon",
+  "jobsAtOnce": 6,
+  "reservedJobs": 1,
+  "jobsPerScenario": 2,
+  "reposPerHour": 80,
+  "nightlyIntervalHours": 24,
+  "queueMarginMinutes": 100,
+  "failedKeepHours": 24,
+  "maxModelScenarios": 2,
+  "minutes": {
+    "provision": 10,
+    "mint": 5,
+    "modelKey": 5,
+    "kanon": 20,
+    "act": 30
+  },
+  "candidateRunsMax": 6,
+  "neutralRerunAfterMinutes": 60,
+  "nightlyFloorDays": 7,
+  "checkName": "kanon-e2e",
+  "reporterAppSlug": "kanon-e2e-reporter",
+  "schedules": {
+    "poll": "*/15 * * * *",
+    "nightly": "7 3 * * *"
+  },
+  "$sources": {
+    "jobsAtOnce": "E0's item 5 (Kanon #968): the organisation ran at most 8 jobs at once, 7 steady, against GitHub's documented 20 for the free plan, with nothing else running. 6 is the lower end of the measured 6 to 7. The likely cause, inferred and not measured, is the organisation's age (under three hours at the probe); re-measured later, and this value follows the answer.",
+    "reservedJobs": "One job of the limit is kept for the harness's own lanes and the janitor (harness #16).",
+    "jobsPerScenario": "The jobs one scenario holds at once: its phase's job, and the run it waits on in its own repository through run.await (harness #16).",
+    "reposPerHour": "E0's item 4 (Kanon #968): 80 repositories were created in five minutes with no secondary limit, so 80 an hour is a lower bound, not the limit.",
+    "nightlyIntervalHours": "The nightly cron fires once a day (harness #16).",
+    "queueMarginMinutes": "Plan 0012 §5.3: the janitor's margin for queueing, about an hour and forty minutes.",
+    "failedKeepHours": "Plan 0012 decision 13: a failed scenario's repository is kept 24 hours.",
+    "maxModelScenarios": "Plan 0012 decision 15: at most two real-model scenarios a run.",
+    "minutes": "Plan 0012 §5.2's timeouts: provision 10; each mint 5; the model-key job 5; a kanon job 20; an act job 30.",
+    "candidateRunsMax": "Plan 0012 §7: at most six runs for one candidate.",
+    "neutralRerunAfterMinutes": "Plan 0012 §7: a neutral check run is re-run by the poll, at most hourly.",
+    "nightlyFloorDays": "Plan 0012 §7, decision 4: a nightly runs when Kanon's main changed, or when no nightly ran in seven days.",
+    "reporterAppSlug": "E0's item 13 (Kanon #968): the Reporter's check run carries the App kanon-e2e-reporter.",
+    "schedules": "Plan 0012 §7: the poll every 15 minutes (decision 19), and the nightly once a day, off the poll's minutes so the two never fire together."
+  }
+}
