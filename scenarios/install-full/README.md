@@ -25,9 +25,9 @@ The order matters. `repo.apply`'s ruleset requires a pull request on the default
 |---|---|---|---|
 | 1 | `kanon` | `kanon.init` with the flags above | |
 | 1 | `kanon` | `register.write`: the App register's rows for `author` and `judge` | |
-| 1 | `kanon` | `expect.init` | Status `steps-left`. The findings `label.create`, `milestone.buckets`, `ruleset.create` and `ruleset.require-check`: what `init` leaves to a person, on a token that can't do it. `/pin` equals `{{release}}`. |
+| 1 | `kanon` | `expect.init` | Status `steps-left`. The findings `label.create` and `milestone.buckets`, what `init` leaves to a person on a token that can't do it, and `ruleset.first-commit`: the default branch has no commit yet, so `init` creates no ruleset until it runs again after the first push (K-ADOPT-4). `/pin` equals `{{release}}`. |
 | 1 | `act` | `files.commit` from the `kanon` job, to the default branch, in one push | |
-| 1 | `act` | `repo.apply`: the labels, the bucket milestones and the ruleset | |
+| 1 | `act` | `repo.apply` with `firstCommit`: the labels, the bucket milestones, and the ruleset `init` would create on its run after this push | |
 | 1 | `act` | `workflow.dispatch` of `apps-check.yml`, then `run.await` for its run | |
 | 1 | `act` | `expect.run` | The run concluded `success`, with `apps / Author` and `apps / Judge` each `success`: one job per App the register lists, so every App the scenario lists was checked against its installation. |
 | 1 | `act` | `run.await` for `ci.yml`'s run on the push | |
@@ -63,7 +63,7 @@ The repository is deleted when the scenario passes. When it fails, it is archive
 The failing job's summary names the first failure. What it usually means:
 
 - **`expect.init` on `/pin`.** `init` pinned another release than the one under test. Most often the candidate was already promoted (above). Otherwise E1's pin rule regressed.
-- **`expect.init` on a finding.** `init` now applies something itself, or names it differently. A finding no longer reported is what `repo.apply` would no longer apply: check Kanon's `docs/init.md` at the release.
+- **`expect.init` on a finding.** `init` now applies something itself, or names it differently. A finding no longer reported is what `repo.apply` would no longer apply: check Kanon's `docs/init.md` at the release. `ruleset.first-commit` missing, with `ruleset.create` in its place, means the repository had a commit before `init` ran: `provision` changed.
 - **`expect.run` on `apps-check`.** A job failed: the App's installation doesn't match what the release's `requirements.json` asks of it, or its secrets are missing (`provision` writes them). A job not in the run means the register lacks that App's rows, or Kanon renamed the job.
 - **`expect.check` on `Lane check`.** `lane-check` refused what `init` wrote, at the same release: that is a finding against Kanon.
 - **The second `repo.apply`.** No ruleset named as `init` names it: the first `repo.apply` didn't create it.

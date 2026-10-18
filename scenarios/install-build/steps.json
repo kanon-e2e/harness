@@ -4,17 +4,17 @@
       "kanon": [
         { "verb": "kanon.init", "flags": ["--feature=build", "--review-trigger=labelled", "--no-sensitive-data"] },
         { "verb": "register.write" },
-        { "verb": "expect.init", "status": "steps-left", "findings": ["label.create", "milestone.buckets", "ruleset.create", "ruleset.require-check"], "fields": [{ "pointer": "/pin", "equals": "{{release}}" }] }
+        { "verb": "expect.init", "status": "steps-left", "findings": ["label.create", "milestone.buckets", "ruleset.first-commit"], "fields": [{ "pointer": "/pin", "equals": "{{release}}" }] }
       ],
       "act": [
         { "verb": "files.commit", "from": "kanon", "message": "Install Kanon's build feature" },
-        { "verb": "repo.apply" },
+        { "verb": "repo.apply", "firstCommit": true },
         { "verb": "workflow.dispatch", "workflow": "apps-check.yml" },
         { "verb": "run.await", "name": "apps-check", "workflow": "apps-check.yml", "event": "workflow_dispatch", "branch": "main", "deadline": 10 },
         { "verb": "expect.run", "run": "apps-check", "conclusion": "success", "jobs": [{ "name": "apps / Author", "conclusion": "success" }, { "name": "apps / Judge", "conclusion": "success" }], "deadline": 2 },
         { "verb": "run.await", "name": "ci", "workflow": "ci.yml", "event": "push", "branch": "main", "deadline": 10 },
         { "verb": "expect.check", "branch": "main", "name": "Lane check", "conclusion": "success", "deadline": 5 },
-        { "verb": "repo.apply" }
+        { "verb": "repo.apply", "firstCommit": true }
       ]
     },
     {
