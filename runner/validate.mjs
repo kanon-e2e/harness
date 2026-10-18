@@ -11,7 +11,9 @@
 //     its kind of segment, with the arguments it takes and a `deadline` where it waits (§4.2, §10);
 //   - an expectation names only a JSON field, a finding id or a known marker, and compares it to
 //     a value: never free text to match, never a field that holds it (§4.3);
-//   - `expect.api` reads only the scenario repository's own API.
+//   - `expect.api` reads only the scenario repository's own API;
+//   - steps.json takes two substitutions, each in one place: `{{repository}}` in `expect.api`'s
+//     path, and `{{release}}` in a `fields` entry's `equals` of `expect.init` and `expect.doctor`.
 //
 //   node runner/validate.mjs [<scenario dir>...]   (default: every directory under scenarios/)
 // prints each problem and exits 1 when there is one.
@@ -100,8 +102,12 @@ const KIND_RULE = {
 };
 const REFERS = { prs: 'pull request', issues: 'issue', runs: 'run' };
 
-/** Every string in a value, with the top-level key it sits under. @param {unknown} v @param {string} key @returns {Array<[string, string]>} */
-const strings = (v, key) => (typeof v === 'string' ? [[key, v]] : Array.isArray(v) ? v.flatMap((x) => strings(x, key)) : isObject(v) ? Object.values(/** @type {object} */ (v)).flatMap((x) => strings(x, key)) : []);
+/**
+ * Every string in a value, with where it sits: the step's key, then each key below it, a list's
+ * index left out (`fields.equals` for a `fields` entry's `equals`, in a list or not).
+ * @param {unknown} v @param {string} key @returns {Array<[string, string]>}
+ */
+const strings = (v, key) => (typeof v === 'string' ? [[key, v]] : Array.isArray(v) ? v.flatMap((x) => strings(x, key)) : isObject(v) ? Object.entries(/** @type {object} */ (v)).flatMap(([k, x]) => strings(x, `${key}.${k}`)) : []);
 
 /**
  * The problems of a steps.json.
@@ -164,7 +170,7 @@ function stepProblems(step, segment, made, scope) {
 
   for (const [key, text] of Object.entries(args).flatMap(([k, x]) => strings(x, k))) {
     for (const [s, name] of text.matchAll(SUBSTITUTION)) {
-      if (!(v.substitutes?.[key] ?? []).includes(name)) p.push(`\`${key}\`: the substitution ${s} is not taken here: steps.json takes \`{{repository}}\` in \`expect.api\`'s path, and nothing else`);
+      if (!(v.substitutes?.[key] ?? []).includes(name)) p.push(`\`${key}\`: the substitution ${s} is not taken here: steps.json takes \`{{repository}}\` in \`expect.api\`'s path, \`{{release}}\` in a \`fields\` entry's \`equals\` of \`expect.init\` and \`expect.doctor\`, and nothing else`);
     }
   }
 

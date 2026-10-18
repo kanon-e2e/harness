@@ -1,0 +1,9 @@
+{
+  "id": "install-full",
+  "family": "install",
+  "tier": "none",
+  "gate": false,
+  "apps": ["author", "judge"],
+  "claude": "none",
+  "deadlineMinutes": 60
+}

@@ -1,6 +1,6 @@
 # Scenarios
 
-Kanon's plan 0012 §4 makes a scenario data: a directory here, `scenarios/<scenario>/`, holding `scenario.json`, a `start/` tree and `steps.json`. [The harness's README](../README.md#scenarios) describes the format. This file lists the step vocabulary a `steps.json` is written in. The validator (`runner/validate.mjs`) refuses a scenario that breaks a rule of either, and the runner reads scenarios only through it. The scenarios themselves are listed in [the harness's README](../README.md#the-catalogue), and each has a README of its own: the first is [`deploy-rehearsal/`](deploy-rehearsal/README.md), plan 0012's step E5.
+Kanon's plan 0012 §4 makes a scenario data: a directory here, `scenarios/<scenario>/`, holding `scenario.json`, a `start/` tree and `steps.json`. [The harness's README](../README.md#scenarios) describes the format. This file lists the step vocabulary a `steps.json` is written in. The validator (`runner/validate.mjs`) refuses a scenario that breaks a rule of either, and the runner reads scenarios only through it. The scenarios themselves are listed in [the harness's README](../README.md#the-catalogue), and each has a README of its own: the first is [`deploy-rehearsal/`](deploy-rehearsal/README.md), plan 0012's step E5, and step E6 adds the install family: [`install-review/`](install-review/README.md), [`install-build/`](install-build/README.md), [`install-full/`](install-full/README.md) and [`install-python/`](install-python/README.md).
 
 ## The rules every verb keeps
 
@@ -13,6 +13,7 @@ Kanon's plan 0012 §4 makes a scenario data: a directory here, `scenarios/<scena
   The validator refuses a verb in the wrong kind of segment.
 - **A verb that waits takes a `deadline`,** a whole number of minutes from 1 to 120. It polls with a backoff from 2 to 30 seconds until what it waits for holds, never sleeping a fixed time (plan 0012 §10). A deadline that passes fails the scenario.
 - **An expectation reads a field, never prose** (§4.3). It names only a JSON field (by name or pointer), a finding id, or a marker from [`runner/known-markers.json`](../runner/known-markers.json), and compares it to a value. No argument takes text to match, and no pointer may pass through a field that holds free text, such as a finding's `message` or a comment's `body`.
+- **Two substitutions, each in one place.** `steps.json` takes `{{repository}}` in `expect.api`'s `path`, and `{{release}}` in a `fields` entry's `equals` of `expect.init` and `expect.doctor` ([below](#substitutions-in-stepsjson)). The validator refuses either anywhere else, and any other.
 
 ## The verbs
 
@@ -39,7 +40,7 @@ A step is an object: `verb`, then the verb's arguments. A step's `name` is the n
 | `ruleset.tags` | Creates the active tag ruleset `Release tags` on the `pattern`, with the creation, update and deletion rules doctor's `deploy.tag-ruleset` reads, letting the test Apps in `bypass` through. | `act` | no |
 | `run.await` | Waits for a `workflow`'s run on an `event` and a commit (a `branch`'s head or a `pr`'s) to complete, and keeps it. | `either` | yes |
 | `issue.await` | Waits for an issue no step opened, one a workflow under test files, by its `author` (an App's slug, `github-actions` for the workflow token) and its `labels`, never its title or body, and keeps the newest under `name` for `expect.issue`. | `either` | yes |
-| `expect.init` | Holds the kept `init` document to a `status`, an `exitCode`, finding ids present (`findings`) and `absent`, and `fields` by pointer. | `either` | no |
+| `expect.init` | Holds the kept `init` document to a `status`, an `exitCode`, finding ids present (`findings`) and `absent`, and `fields` by pointer. A `fields` entry's `equals` may hold `{{release}}`. | `either` | no |
 | `expect.doctor` | Holds the kept doctor document as `expect.init` does, and to the `unchecked` checks it allows: any other `unchecked` check fails it. | `either` | no |
 | `expect.run` | Holds a kept run to its `conclusion`, and its `jobs`, by name, to theirs. | `either` | yes |
 | `expect.check` | Holds a commit's check run, or else its status, of a `name` to a `conclusion`. | `either` | yes |
@@ -47,6 +48,24 @@ A step is an object: `verb`, then the verb's arguments. A step's `name` is the n
 | `expect.pr` | Holds a pull request as `expect.issue` holds an issue, with `merged` as a state, and looks for the marker in its reviews too. | `either` | yes |
 | `expect.artifact` | Holds a kept run to an artifact of a `name`. | `either` | yes |
 | `expect.api` | Makes one GET of the scenario repository's own API per try, a `path` under `repos/{{repository}}/`, and holds the value at a `pointer` to what it `equals`. The validator refuses any other path. | `either` | yes |
+
+## Substitutions in steps.json
+
+`start/` takes `{{release}}` and `{{repository}}` anywhere ([the harness's README](../README.md#scenarios)). `steps.json` takes each in one place only:
+
+| Substitution | Where | Filled in with |
+|---|---|---|
+| `{{repository}}` | `expect.api`'s `path`, as its prefix `repos/{{repository}}/` | The scenario repository's `<owner>/<name>`. |
+| `{{release}}` | A `fields` entry's `equals`, in `expect.init` and `expect.doctor`: the string, or a string in its list | The release under test, before comparing. |
+
+So an expectation can say "pinned to the release under test", which no literal can, since the release differs per run:
+
+```json
+{ "verb": "expect.init", "status": "steps-left", "fields": [{ "pointer": "/pin", "equals": "{{release}}" }] }
+{ "verb": "expect.doctor", "fields": [{ "pointer": "/releases/pins", "equals": ["{{release}}"] }, { "pointer": "/releases/pinned", "equals": "{{release}}" }] }
+```
+
+A document that pins any other release fails it. The validator refuses `{{release}}` anywhere else in `steps.json`, a `fields` entry's `pointer` and `expect.api`'s `equals` among them, and `{{repository}}` in `equals`.
 
 ## Doctor on the `kanon` job's token
 

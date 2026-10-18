@@ -1,0 +1,9 @@
+{
+  "id": "install-review",
+  "family": "install",
+  "tier": "none",
+  "gate": false,
+  "apps": ["judge"],
+  "claude": "none",
+  "deadlineMinutes": 60
+}

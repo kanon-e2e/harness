@@ -303,6 +303,25 @@ describe('substitutions in steps.json', () => {
   it('refuses any other than {{repository}} in expect.api\'s path', () => {
     expect(stepErrors({ verb: 'issue.open', name: 'a', title: 'Bump to {{release}}' }).join('\n')).toMatch(/substitution/);
   });
+
+  it.each(['expect.init', 'expect.doctor'])('accepts {{release}} in a `fields` entry\'s `equals` of %s, a string or in a list', (verb) => {
+    const fields = [{ pointer: '/releases/pinned', equals: '{{release}}' }, { pointer: '/releases/pins', equals: ['{{release}}'] }];
+    expect(stepErrors({ verb, fields, ...(verb === 'expect.doctor' ? { unchecked: ['secrets'] } : {}) }, 'kanon')).toEqual([]);
+  });
+
+  it.each([
+    ['in a `fields` entry\'s pointer', { verb: 'expect.init', fields: [{ pointer: '/{{release}}', equals: 'x' }] }],
+    ['{{repository}} in a `fields` entry\'s equals', { verb: 'expect.init', fields: [{ pointer: '/pin', equals: '{{repository}}' }] }],
+    ['an unknown one in a `fields` entry\'s equals', { verb: 'expect.doctor', fields: [{ pointer: '/releases/pinned', equals: '{{owner}}' }] }],
+    ['in expect.api\'s equals', { verb: 'expect.api', path: 'repos/{{repository}}/', pointer: '/name', equals: '{{release}}', deadline: 1 }],
+    ['in expect.api\'s pointer', { verb: 'expect.api', path: 'repos/{{repository}}/', pointer: '/{{release}}', equals: 'x', deadline: 1 }],
+    ['in kanon.init\'s flags', { verb: 'kanon.init', flags: ['--project-owner={{release}}'] }],
+    ['in workflow.dispatch\'s inputs', { verb: 'workflow.dispatch', workflow: 'ci.yml', inputs: { release: '{{release}}' } }],
+    ['in expect.issue\'s labels', { verb: 'expect.issue', issue: 'bug', labels: ['{{release}}'], deadline: 1 }],
+  ])('still refuses {{release}} anywhere else new: %s', (_, step) => {
+    const segment = step.verb === 'kanon.init' ? 'kanon' : 'act';
+    expect(stepErrors(step, segment, step.verb === 'expect.issue' ? OPENED : []).join('\n')).toMatch(/substitution/);
+  });
 });
 
 describe('validateScenarioDir', () => {
