@@ -141,7 +141,8 @@ export function validateSteps(steps, scope = {}) {
         const where = `phases[${i}].${segment}[${j}]`;
         if (!isObject(step) || typeof step.verb !== 'string') return p.push(`${where}: a step is an object that names its \`verb\``);
         const errors = stepProblems(step, segment, made, scope);
-        if (step.verb === 'repo.apply' && ++applies > 2) errors.push('`repo.apply` runs at most twice: the first applies the settings init leaves, the second the `Lane check` rule');
+        if (step.verb === 'repo.apply' && ++applies > 2) errors.push('`repo.apply` runs at most twice for each kept init document: the first applies the settings init leaves, the second the `Lane check` rule');
+        if ((VOCABULARY[step.verb]?.defines?.(step) ?? []).some(([kind, name]) => kind === 'documents' && name === 'init')) applies = 0;
         if (step.verb === 'bootstrap.end' && typeof step.move === 'string') {
           if (ends.has(step.move)) errors.push(`\`${step.move}\` runs once`);
           if (step.move === 'approval' && !ends.has('record')) errors.push('`approval` has no earlier `record`: once the ruleset requires an approval, the record can\'t reach the default branch without one');

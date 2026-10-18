@@ -3,14 +3,14 @@
 // point. It keeps the document where `kanon.init` or `kanon.doctor` would.
 
 import { str, strs } from '../lib/args.mjs';
-import { doctorArgs, initArgs, initFlagProblems, keep, resolveRelease, runKanon } from '../lib/kanon.mjs';
+import { NAMED_RELEASE, doctorArgs, initArgs, initFlagProblems, keep, resolveRelease, runKanon } from '../lib/kanon.mjs';
 
 export default {
   verb: 'kanon.at',
   kind: 'kanon',
   waits: false,
   args: {
-    release: str({ required: true, pattern: /^(?:previous|previous-1|(?:candidate-)?v\d+\.\d+\.\d+)$/, hint: 'previous, previous-1 or an exact release' }),
+    release: str({ required: true, pattern: NAMED_RELEASE, hint: 'previous, previous-1 or an exact release' }),
     command: str({ required: true, enum: ['init', 'doctor'] }),
     flags: strs(),
   },

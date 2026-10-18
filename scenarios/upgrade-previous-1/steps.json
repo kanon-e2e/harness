@@ -1,0 +1,45 @@
+{
+  "phases": [
+    {
+      "kanon": [
+        { "verb": "kanon.at", "release": "previous-1", "command": "init", "flags": ["--feature=full", "--review-trigger=labelled", "--no-sensitive-data"] },
+        { "verb": "register.write", "release": "previous-1" }
+      ],
+      "act": [
+        { "verb": "files.commit", "from": "kanon", "message": "Install Kanon's full feature at the older release" },
+        { "verb": "repo.apply" },
+        { "verb": "workflow.dispatch", "workflow": "apps-check.yml" },
+        { "verb": "run.await", "name": "apps-check", "workflow": "apps-check.yml", "event": "workflow_dispatch", "branch": "main", "deadline": 10 },
+        { "verb": "expect.run", "run": "apps-check", "conclusion": "success", "jobs": [{ "name": "apps / Author", "conclusion": "success" }, { "name": "apps / Judge", "conclusion": "success" }], "deadline": 2 },
+        { "verb": "run.await", "name": "ci", "workflow": "ci.yml", "event": "push", "branch": "main", "deadline": 10 },
+        { "verb": "expect.check", "branch": "main", "name": "Lane check", "conclusion": "success", "deadline": 5 },
+        { "verb": "repo.apply" }
+      ]
+    },
+    {
+      "kanon": [
+        { "verb": "kanon.doctor", "to": true },
+        { "verb": "expect.doctor", "unchecked": ["secrets"], "fields": [{ "pointer": "/releases/to", "equals": "{{release}}" }] },
+        { "verb": "pins.move" },
+        { "verb": "kanon.init", "flags": ["--feature=full", "--review-trigger=labelled", "--no-sensitive-data"] }
+      ],
+      "act": [
+        { "verb": "files.commit", "from": "kanon", "branch": "upgrade", "message": "chore: upgrade Kanon to the release under test" },
+        { "verb": "pr.open", "name": "upgrade", "head": "upgrade", "title": "chore: upgrade Kanon to the release under test", "body": "The upgrade scenario's pull request: the pins moved by Kanon's scripts/move-pins.mjs, and what init at the release under test writes." },
+        { "verb": "run.await", "name": "ci-upgrade", "workflow": "ci.yml", "event": "pull_request", "pr": "upgrade", "deadline": 10 },
+        { "verb": "expect.check", "pr": "upgrade", "name": "Lane check", "conclusion": "success", "deadline": 5 },
+        { "verb": "pr.merge", "pr": "upgrade", "via": "front-door", "deadline": 10 },
+        { "verb": "expect.pr", "pr": "upgrade", "state": "merged", "deadline": 2 },
+        { "verb": "repo.apply" },
+        { "verb": "repo.apply" }
+      ]
+    },
+    {
+      "kanon": [
+        { "verb": "kanon.doctor" },
+        { "verb": "expect.doctor", "status": "incomplete", "exitCode": 4, "unchecked": ["secrets"], "absent": ["pin.mixed"], "fields": [{ "pointer": "/releases/pins", "equals": ["{{release}}"] }, { "pointer": "/releases/pinned", "equals": "{{release}}" }] }
+      ],
+      "act": []
+    }
+  ]
+}

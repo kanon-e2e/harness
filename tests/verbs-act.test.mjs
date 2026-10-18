@@ -128,6 +128,22 @@ describe('repo.apply', () => {
     });
   });
 
+  it('the count starts again at a new init document: a third call after one applies its labels, and a third call without one is still refused', async () => {
+    const upgraded = { schema: 'kanon-init/v1', status: 'steps-left', inspection: { mergeQueue: 'no' }, findings: [finding('label.create'), finding('ruleset.require-check')] };
+    const npx = stubExec([[(c) => c.cmd === 'npx', () => ({ status: 0, stdout: JSON.stringify(upgraded) })]]);
+    for (const [verb, step] of [['kanon.init', { flags: ['--feature=full'] }], ['kanon.at', { release: RELEASE, command: 'init' }]]) {
+      const g = stubGh(routes());
+      const ctx = context({ gh: g.gh, exec: npx.exec, state: { ...kept(ALL), repoApply: 2 } });
+      await run(verb, step, ctx);
+      await run('repo.apply', {}, ctx);
+      expect(g.writes().map((c) => [c.key, c.body])).toEqual([[`POST repos/${REPO}/labels`, { name: 'review:please' }], [`POST repos/${REPO}/labels`, { name: 'autorelease: pending' }]]);
+      expect(ctx.state.repoApply).toBe(1);
+    }
+    const doctor = context({ exec: stubExec([[(c) => c.cmd === 'npx', () => ({ status: 4, stdout: JSON.stringify({ schema: 'kanon-doctor/v1', status: 'incomplete', exitCode: 4 }) })]]).exec, state: { ...kept([]), repoApply: 2 } });
+    await run('kanon.doctor', { to: true }, doctor);
+    await expect(run('repo.apply', {}, doctor)).rejects.toThrow(/third/);
+  });
+
   it('skips a ruleset that already exists, rather than making a second', async () => {
     const g = stubGh(routes({ [`GET repos/${REPO}/rulesets?per_page=100`]: [[{ id: 7, name: 'Kanon: default branch' }]] }));
     await run('repo.apply', {}, context({ gh: g.gh, state: kept(['ruleset.create']) }));

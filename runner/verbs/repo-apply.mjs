@@ -8,6 +8,10 @@
 //   second call: `ruleset.require-check`, the ruleset's required `Lane check` rule, once the
 //                pushed callers are on the default branch and a job there reports it.
 //
+// The count starts again when a new `init` document is kept (`kanon.init`, or `kanon.at` with
+// `init`), so an upgrade's `init` at the release under test gets its own two calls: the first
+// creates what the new release adds, such as a new label.
+//
 // `init`'s read-only token can't see the merge settings, so it names no `merge.settings`; the
 // `provision` job sets them, as the release under test's guard checks them, before the first
 // push (e2e.yml, #36).
@@ -73,7 +77,7 @@ export default {
   async run(step, ctx) {
     const k = kept(ctx, 'init');
     const call = ctx.state.repoApply ?? 0;
-    if (call >= CALLS.length) throw new Error('repo.apply runs at most twice: this is a third call');
+    if (call >= CALLS.length) throw new Error('repo.apply runs at most twice for each kept init document: this is a third call');
     const named = new Set((k.document.findings ?? []).map((/** @type {any} */ f) => f.id));
     if (step.firstCommit && named.has('ruleset.first-commit')) for (const id of AFTER_FIRST_COMMIT) named.add(id);
     const applying = CALLS[call].filter((id) => named.has(id));
