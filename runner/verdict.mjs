@@ -199,7 +199,7 @@ export async function give(input, { gh, log = () => {} }) {
   }
 
   const red = issues.map((i) => ({ issue: i, marker: readMarker(i.body, RED) })).find((x) => x.marker?.candidate === release) ?? null;
-  const v = judge({ trigger, planned, results, startResult, held: null });
+  const v = judge({ trigger, planned, results, startResult, held: red?.marker?.failSeen === true ? { url: red.issue.html_url } : null });
   const byId = new Map(results.filter(readable).map((r) => [r.scenario, r]));
 
   /** @type {string | null} */
