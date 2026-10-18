@@ -85,9 +85,11 @@ export default {
       if (why) throw new Error(`refused: \`${f.path}\` is ${why}`);
     }
     const id = ctx.identity ?? IDENTITY;
+    // A failure carries git's stderr, so the runner reads a transport error `infra`. `ls-remote
+    // --exit-code`'s 2 is an answer, the branch missing, not a failure.
     const git = async (/** @type {string[]} */ args) => {
       const r = await ctx.exec('git', args, { cwd: ctx.clone });
-      if (r.status !== 0 && args[0] !== 'ls-remote') throw new Error(`git ${args.find((a) => !a.startsWith('-') && !a.includes('=')) ?? args[0]} exited ${r.status}: ${String(r.stderr).trim()}`);
+      if (r.status !== 0 && !(args[0] === 'ls-remote' && r.status === 2)) throw Object.assign(new Error(`git ${args.find((a) => !a.startsWith('-') && !a.includes('=')) ?? args[0]} exited ${r.status}: ${String(r.stderr).trim()}`), { stderr: r.stderr });
       return r;
     };
     const branch = step.branch ?? ctx.defaultBranch;

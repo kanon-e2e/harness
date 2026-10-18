@@ -78,7 +78,7 @@ Everything under `runner/`, the verbs, the validator and the known markers inclu
 - `tests/verbs-kanon.test.mjs`, `tests/verbs-act.test.mjs` and `tests/verbs-read.test.mjs` test each verb on a stubbed `gh`, `npx` and `git`.
 - `tests/workflows.test.mjs` holds the harness's workflows to plan 0012 §5.2: no job that holds an App key runs someone else's code, each environment is named only by the jobs §5.2 lists and the probes, no `-job` workflow names a private key, and no workflow runs on a pull-request event with a secret, other than those Kanon's own lane callers map by name into their lane.
 - `tests/e2e-workflows.test.mjs` holds `e2e.yml` and its pairs to plan 0012 §5.2: the jobs, their order and conditions, each pair's mint and token, the read-only `kanon` token, an `act` job that runs no Kanon code, and every matrix's max-parallel and every job's timeout held to `runner/settings.json`.
-- `tests/runner.test.mjs` tests the runner a segment at a time on a stubbed `gh` and `npx` and a real `git`: pass, fail and infra, the retries, the state, and how the repository ends.
+- `tests/runner.test.mjs` tests the runner a segment at a time on a stubbed `gh` and `npx` and a real `git`, each `git` call stubbable: pass, fail and infra, the retries of `gh` and `git`, the state, and how the repository ends.
 - `tests/artifact.test.mjs` holds the `act` job to taking the `kanon` job's tree as data: a hostile tree runs nothing, reads nothing outside it, and pushes nothing.
 - `tests/plan.test.mjs` tests `plan`'s decisions: the poll, the nightly, the dispatch, and one run at a time.
 - `tests/verdict-report.test.mjs` tests the verdict and the check run's conclusion `report` gives it.

@@ -3,7 +3,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { exec as realExec } from '../runner/lib/proc.mjs';
-import { classify, isRetryable, retrying } from '../runner/lib/retry.mjs';
+import { classify, isRetryable, retrying, retryingExec } from '../runner/lib/retry.mjs';
 import { readState, runSegment } from '../runner/run.mjs';
 import { RELEASE, fail, fakeClock, inTurn, scenarioJson, stubGh, tempDir, writeScenario } from './helpers/stubs.mjs';
 
@@ -58,7 +58,7 @@ const VARS = `GET repos/${REPOSITORY}/actions/variables`;
 const expectVars = (n = 1, deadline = 1) => ({ verb: 'expect.api', path: 'repos/{{repository}}/actions/variables', pointer: '/total_count', equals: n, deadline });
 
 /** Runs one segment with everything outside stubbed but git. */
-const segment = async ({ segment: kind = 'act', phase = 1, steps, scenario, state, stateProblem, routes = {}, gh, npx, artifactDir, remote = bareRemote(), start } = {}) => {
+const segment = async ({ segment: kind = 'act', phase = 1, steps, scenario, state, stateProblem, routes = {}, gh, npx, git, artifactDir, remote = bareRemote(), start } = {}) => {
   const dir = writeScenario({ scenario: scenario ?? scenarioJson('sample'), steps: steps ?? { phases: [{ kanon: [], act: [expectVars()] }] }, ...(start ? { start } : {}) });
   const g = gh ?? stubGh({ ...repoRoutes(), ...routes });
   const clock = fakeClock();
@@ -66,7 +66,9 @@ const segment = async ({ segment: kind = 'act', phase = 1, steps, scenario, stat
   const exec = async (cmd, args, opts = {}) => {
     calls.push({ cmd, args, cwd: opts.cwd });
     if (cmd === 'npx') return npx ? npx(args, opts) : { status: 1, stdout: '', stderr: 'npx is stubbed' };
-    return realExec(cmd, args, opts);
+    // `git`'s answer from the test's stub, when it gives one; the real git's otherwise.
+    const stubbed = cmd === 'git' && git ? git(args, opts) : undefined;
+    return stubbed ?? realExec(cmd, args, opts);
   };
   const work = tempDir('work-');
   const out = await runSegment({
@@ -160,6 +162,106 @@ describe('a 502 is retried; a false expectation is not (§10)', () => {
     expect((await gh(['api', 'x'])).status).toBe(1);
     expect(n).toBe(4);
     expect(clock.sleeps).toEqual([2000, 4000, 8000]);
+  });
+});
+
+describe('`git` to GitHub is retried as `gh` is; a transport error it outlasts is `infra` (§10)', () => {
+  const BAD_GATEWAY = { status: 128, stdout: '', stderr: "fatal: unable to access 'https://github.com/kanon-e2e/e2e-sample-123-1.git/': The requested URL returned error: 502\n" };
+  const REJECTED = { status: 1, stdout: '', stderr: " ! [rejected]        HEAD -> main (fetch first)\nerror: failed to push some refs to 'https://github.com/kanon-e2e/e2e-sample-123-1.git'\n" };
+  const gitCalls = (calls, sub) => calls.filter((c) => c.cmd === 'git' && c.args[0] === sub);
+  /** A `git` stub that answers `sub`'s calls in turn with `answers`, the last repeated: undefined runs the real git. */
+  const failing = (sub, ...answers) => {
+    let n = 0;
+    return (args) => (args[0] === sub ? answers[Math.min(n++, answers.length - 1)] : undefined);
+  };
+  const commitStep = { verb: 'files.commit', delete: ['README.md'], message: 'Remove the README' };
+
+  it('retries a clone that fails with a 502, and the scenario passes', async () => {
+    for (const kind of ['act', 'kanon']) {
+      const { state, calls, clock } = await segment({ segment: kind, state: kind === 'act' ? kanonState() : null, routes: { [VARS]: { total_count: 1 } }, git: failing('clone', BAD_GATEWAY, undefined) });
+      expect(state.result, kind).toBe(kind === 'act' ? 'pass' : null);
+      expect(gitCalls(calls, 'clone'), kind).toHaveLength(2);
+      expect(clock.sleeps, kind).toEqual([2000]);
+    }
+  });
+
+  it('a clone whose 502 outlasts the retries reads `infra`, not `fail`', async () => {
+    for (const kind of ['act', 'kanon']) {
+      const { state, calls } = await segment({ segment: kind, state: kind === 'act' ? kanonState() : null, routes: { [VARS]: { total_count: 1 } }, git: failing('clone', BAD_GATEWAY) });
+      expect(state.result, kind).toBe('infra');
+      expect(state.firstFailure.message, kind).toMatch(/git clone exited 128: .*returned error: 502/);
+      expect(gitCalls(calls, 'clone'), kind).toHaveLength(4);
+    }
+  });
+
+  it('the push that lays start/, failing with a 502 the retries outlast, reads `infra`, and the repository is deleted', async () => {
+    const { result, calls, remote } = await segment({ state: kanonState(), routes: { [VARS]: { total_count: 1 } }, git: failing('push', BAD_GATEWAY) });
+    expect(result).toMatchObject({ result: 'infra', repositoryAction: 'deleted' });
+    expect(result.firstFailure.message).toMatch(/git push exited 128: .*returned error: 502/);
+    expect(gitCalls(calls, 'push')).toHaveLength(4);
+    expect(commits(remote)).toEqual([]);
+  });
+
+  it('`files.commit`\'s push, failing with a 502 the retries outlast, reads `infra`; one that comes back is retried and passes', async () => {
+    const steps = { phases: [{ kanon: [], act: [commitStep] }] };
+    // The first push lays start/; the step's is the second.
+    const outlasted = await segment({ steps, state: kanonState(), git: failing('push', undefined, BAD_GATEWAY) });
+    expect(outlasted.result).toMatchObject({ result: 'infra', repositoryAction: 'deleted', firstFailure: expect.objectContaining({ verb: 'files.commit', message: expect.stringMatching(/git push exited 128: .*returned error: 502/) }) });
+    expect(outlasted.result.steps).toEqual([expect.objectContaining({ verb: 'files.commit', outcome: 'infra' })]);
+    expect(gitCalls(outlasted.calls, 'push')).toHaveLength(5);
+    const recovered = await segment({ steps, state: kanonState(), git: failing('push', undefined, BAD_GATEWAY, undefined) });
+    expect(recovered.result.result).toBe('pass');
+    expect(commits(recovered.remote)).toEqual(['Remove the README', 'Lay the scenario\'s starting tree']);
+  });
+
+  it('`files.commit`\'s fetch, failing with a host that won\'t resolve, reads `infra`', async () => {
+    const steps = { phases: [{ kanon: [], act: [commitStep] }] };
+    const unresolved = { status: 128, stdout: '', stderr: "fatal: unable to access 'https://github.com/kanon-e2e/e2e-sample-123-1.git/': Could not resolve host: github.com\n" };
+    const { result, calls } = await segment({ steps, state: kanonState(), git: failing('fetch', unresolved) });
+    expect(result).toMatchObject({ result: 'infra', firstFailure: expect.objectContaining({ verb: 'files.commit' }) });
+    expect(gitCalls(calls, 'fetch')).toHaveLength(4);
+  });
+
+  it('a push GitHub rejects is not transport: asked once, and it reads `fail` as before', async () => {
+    const steps = { phases: [{ kanon: [], act: [commitStep] }] };
+    const { result, calls } = await segment({ steps, state: kanonState(), git: failing('push', undefined, REJECTED) });
+    expect(result).toMatchObject({ result: 'fail', repositoryAction: 'kept', firstFailure: expect.objectContaining({ verb: 'files.commit', message: expect.stringMatching(/rejected/) }) });
+    expect(gitCalls(calls, 'push')).toHaveLength(2);
+  });
+
+  it('isRetryable: git\'s and curl\'s wording for a 5xx and a network failure; never a rejected push, a 4xx or a refused path', () => {
+    for (const stderr of [
+      BAD_GATEWAY.stderr,
+      'error: RPC failed; HTTP 503 curl 22 The requested URL returned error: 503',
+      "fatal: unable to access 'https://github.com/o/r.git/': Could not resolve host: github.com",
+      "fatal: unable to access 'https://github.com/o/r.git/': Failed to connect to github.com port 443 after 130 ms: Couldn't connect to server",
+      'error: RPC failed; curl 56 GnuTLS recv error (-54): Error in the pull function.',
+      'error: RPC failed; curl 92 HTTP/2 stream 5 was not closed cleanly: CANCEL (err 8)',
+      'fatal: early EOF',
+    ]) expect(isRetryable({ status: 128, stderr }), stderr).toBe(true);
+    for (const stderr of [
+      REJECTED.stderr,
+      "fatal: unable to access 'https://github.com/o/r.git/': The requested URL returned error: 403",
+      'error: RPC failed; HTTP 413 curl 22 The requested URL returned error: 413',
+      "remote: error: GH013: Repository rule violations found for refs/heads/main.\n ! [remote rejected] HEAD -> main (push declined due to repository rule violations)",
+      "fatal: pathspec 'docs/whereof.md' did not match any files",
+    ]) expect(isRetryable({ status: 1, stderr }), stderr).toBe(false);
+  });
+
+  it('retryingExec(): retries git\'s clone, fetch, push and ls-remote, past its options; never another git command, nor another program', async () => {
+    const clock = fakeClock();
+    const seen = [];
+    const exec = retryingExec(async (cmd, args) => { seen.push([cmd, ...args].join(' ')); return { status: 128, stdout: '', stderr: 'The requested URL returned error: 502' }; }, { sleep: clock.sleep });
+    for (const args of [['clone', '-q', 'u', 'd'], ['fetch', '-q', 'origin'], ['-c', 'http.x=y', 'push', '-q', 'origin', 'HEAD'], ['ls-remote', 'origin']]) {
+      seen.length = 0;
+      expect((await exec('git', args)).status).toBe(128);
+      expect(seen, args.join(' ')).toHaveLength(4);
+    }
+    for (const [cmd, args] of [['git', ['commit', '-q', '-m', 'push']], ['git', ['-c', 'user.name=push', 'add', '-A']], ['npx', ['push']]]) {
+      seen.length = 0;
+      await exec(cmd, args);
+      expect(seen, `${cmd} ${args.join(' ')}`).toHaveLength(1);
+    }
   });
 });
 
