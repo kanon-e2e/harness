@@ -219,6 +219,24 @@ describe('pr.merge', () => {
     expect(g.calls.map((c) => c.key)).toContain(`pr merge 5 -R ${REPO} --squash`);
   });
 
+  it('merges at once where the repository doesn\'t allow auto-merge, as `kanon init` leaves a fresh one', async () => {
+    const g = stubGh({
+      [`pr merge 5 -R ${REPO} --squash --auto`]: fail('GraphQL: Auto merge is not allowed for this repository (enablePullRequestAutoMerge)'),
+      [`pr merge 5 -R ${REPO} --squash`]: undefined,
+      ...pulls({ state: 'closed', merged: true }),
+    });
+    await run('pr.merge', { pr: 'docs', via: 'front-door', deadline: 5 }, context({ gh: g.gh, state: { prs: { docs: 5 } } }));
+    expect(g.calls.map((c) => c.key)).toEqual([`pr merge 5 -R ${REPO} --squash --auto`, `pr merge 5 -R ${REPO} --squash`, `GET repos/${REPO}/pulls/5`]);
+  });
+
+  it('fails with GitHub\'s answer when the merge without auto-merge is refused too', async () => {
+    const g = stubGh({
+      [`pr merge 5 -R ${REPO} --squash --auto`]: fail('GraphQL: Auto merge is not allowed for this repository (enablePullRequestAutoMerge)'),
+      [`pr merge 5 -R ${REPO} --squash`]: fail('Required status check "Lane check" is expected.'),
+    });
+    await expect(run('pr.merge', { pr: 'docs', via: 'front-door', deadline: 5 }, context({ gh: g.gh, state: { prs: { docs: 5 } } }))).rejects.toThrow(/Lane check/);
+  });
+
   it('as the driver, where the ruleset lets a bypass actor through', async () => {
     const g = stubGh({ [`pr merge 5 -R ${REPO} --squash --admin`]: undefined, ...pulls({ state: 'closed', merged: true }) });
     await run('pr.merge', { pr: 'docs', via: 'bypass', deadline: 5 }, context({ gh: g.gh, state: { prs: { docs: 5 } } }));
