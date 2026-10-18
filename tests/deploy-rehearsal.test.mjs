@@ -39,6 +39,8 @@ describe('the deploy rehearsal is a valid scenario of the deploy family', () => 
   it('scenario.json: family deploy, no model, no Claude, the Releaser, and no gate yet', () => {
     expect(scenario).toMatchObject({ id: 'deploy-rehearsal', family: 'deploy', tier: 'none', claude: 'none', gate: false });
     expect(scenario.apps).toContain('releaser');
+    // The review lane init installs reads the Reviewer's slug from the App register (K-LAYOUT-6).
+    expect(scenario.apps).toContain('judge');
     expect(scenario.deadlineMinutes).toBeLessThanOrEqual(120);
   });
 
@@ -56,6 +58,12 @@ describe('the deploy rehearsal is a valid scenario of the deploy family', () => 
     const [init] = ofVerb('kanon.init');
     expect(init.phase).toBe(1);
     expect(init.flags).toContain('--deploy-environments=staging,production');
+  });
+
+  it('writes the App register in the kanon segment, before the install is committed, or lane-check fails CI and the gate refuses the release', () => {
+    const [register] = ofVerb('register.write');
+    expect(register).toMatchObject({ phase: 1, segment: 'kanon' });
+    expect(phases[0].kanon.findIndex((s) => s.verb === 'register.write')).toBeGreaterThan(phases[0].kanon.findIndex((s) => s.verb === 'kanon.init'));
   });
 
   it('fills the three hooks in start/, so init writes no stub over them, and the deploy hook answers the trust probe `refused`', () => {

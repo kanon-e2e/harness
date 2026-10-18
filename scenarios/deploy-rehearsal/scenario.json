@@ -3,7 +3,7 @@
   "family": "deploy",
   "tier": "none",
   "gate": false,
-  "apps": ["releaser"],
+  "apps": ["judge", "releaser"],
   "claude": "none",
   "deadlineMinutes": 100
 }
