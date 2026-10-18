@@ -2,7 +2,8 @@
   "phases": [
     {
       "kanon": [
-        { "verb": "kanon.init", "flags": ["--feature=review", "--review-trigger=labelled", "--no-sensitive-data", "--deploy-environments=staging,production"] }
+        { "verb": "kanon.init", "flags": ["--feature=review", "--review-trigger=labelled", "--no-sensitive-data", "--deploy-environments=staging,production"] },
+        { "verb": "register.write" }
       ],
       "act": [
         { "verb": "files.commit", "from": "kanon", "message": "Install Kanon, with the deploy lane for staging then production" },

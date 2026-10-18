@@ -2,7 +2,7 @@
 
 Kanon's plan 0010 ended with D12: a person took one repository through the deploy lane by hand, release by release, at v0.40.0. This scenario is plan 0012's step E5: the same rehearsal, automated, run on every candidate and every nightly. It installs the deploy lane for `staging` then `production` in a fresh repository, cuts three releases through it, and holds each run to what the lane promises. It runs on GitHub alone: the hooks touch no cloud, and no credential is involved.
 
-`scenario.json`: family `deploy`, tier `none`, Claude `none`, the Releaser as its one test App, and `gate: false`. It counts toward the release gate only after ten consecutive scheduled passes and the Owner's decision.
+`scenario.json`: family `deploy`, tier `none`, Claude `none`, two test Apps, the Judge and the Releaser, and `gate: false`. It counts toward the release gate only after ten consecutive passes, scheduled or dispatched (Kanon plan 0012 decision 24), and the Owner's decision.
 
 ## What the repository holds
 
@@ -24,7 +24,7 @@ Before the first release, the `act` job sets the repository up as plan 0010 §4 
 - **`production`**, the same, with the Owner (`environmentReviewer` in [`runner/settings.json`](../../runner/settings.json)) as its required reviewer, and self-review prevented.
 - **`Release tags`**, an active tag ruleset on `v*.*.*` with the creation, update and deletion rules, which the Releaser bypasses. The major tag `v0`, which Kanon's release workflow moves, is outside the pattern.
 
-`repo.apply` also does what `init` leaves to a person: squash-only merging, which Kanon's release workflow requires, the labels, the milestones and the default branch's ruleset.
+`register.write` writes the App register's rows (`docs/qa/agent-identities.md`) for the Judge and the Releaser, as `kanon apps --reuse` would. Without the register, `lane-check` fails CI on every commit ("the App register is missing (K-LAYOUT-6)"), and the deploy lane's gate refuses a red commit (`ci-red`, K-SHIP-8). The Judge is there because the review lane `init` installs reads the Reviewer's slug from it. `repo.apply` also does what `init` leaves to a person: squash-only merging, which Kanon's release workflow requires, the labels, the milestones and the default branch's ruleset.
 
 ## The three releases
 
