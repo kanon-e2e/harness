@@ -272,17 +272,47 @@ describe('deployment.await-approval', () => {
     [`GET repos/${REPO}/actions/runs/77/pending_deployments`]: [{ environment: { name: 'production' } }],
   };
 
-  it('nightly: waits until the environment\'s job is waiting, then cancels the run', async () => {
-    const g = stubGh({ ...waiting, [`POST repos/${REPO}/actions/runs/77/cancel`]: {} });
+  const JOBS = `GET repos/${REPO}/actions/runs/77/jobs?per_page=100`;
+  const job = (status, conclusion = null) => ({ jobs: [
+    { id: 4, name: 'staging / deploy', status: 'completed', conclusion: 'success' },
+    { id: 5, name: 'production / deploy', status, conclusion },
+  ] });
+
+  it('nightly: waits until the environment\'s job is waiting, cancels the run, and holds that job to `cancelled`', async () => {
+    const g = stubGh({
+      ...waiting,
+      [JOBS]: inTurn(job('queued'), job('waiting'), job('waiting'), job('completed', 'cancelled')),
+      [`POST repos/${REPO}/actions/runs/77/cancel`]: {},
+    });
     const ctx = context({ gh: g.gh, trigger: 'nightly' });
     await run('deployment.await-approval', { environment: 'production', workflow: 'deploy.yml', deadline: 30 }, ctx);
     expect(g.writes().map((c) => c.key)).toEqual([`POST repos/${REPO}/actions/runs/77/cancel`]);
-    expect(ctx.state.approvals).toEqual({ production: { run: 77, decision: 'cancelled' } });
+    expect(ctx.state.approvals).toEqual({ production: { run: 77, decision: 'cancelled', jobs: ['production / deploy'] } });
+  });
+
+  it('a dispatch: cancels as a nightly does', async () => {
+    const g = stubGh({ ...waiting, [JOBS]: inTurn(job('waiting'), job('completed', 'cancelled')), [`POST repos/${REPO}/actions/runs/77/cancel`]: {} });
+    const ctx = context({ gh: g.gh, trigger: 'dispatch' });
+    await run('deployment.await-approval', { environment: 'production', deadline: 30 }, ctx);
+    expect(ctx.state.approvals.production.decision).toBe('cancelled');
+  });
+
+  it('fails when the waiting job ends other than `cancelled` once the run is cancelled', async () => {
+    const g = stubGh({ ...waiting, [JOBS]: inTurn(job('waiting'), job('completed', 'success')), [`POST repos/${REPO}/actions/runs/77/cancel`]: {} });
+    await expect(run('deployment.await-approval', { environment: 'production', deadline: 30 }, context({ gh: g.gh })))
+      .rejects.toMatchObject({ name: 'Fail', message: expect.stringMatching(/production \/ deploy.*success/) });
+  });
+
+  it('fails when the waiting job hasn\'t ended by the deadline', async () => {
+    const g = stubGh({ ...waiting, [JOBS]: job('waiting'), [`POST repos/${REPO}/actions/runs/77/cancel`]: {} });
+    await expect(run('deployment.await-approval', { environment: 'production', deadline: 2 }, context({ gh: g.gh })))
+      .rejects.toMatchObject({ name: 'Fail', message: expect.stringMatching(/production \/ deploy/) });
   });
 
   it('a candidate\'s run: files the Owner\'s approval request in the harness, and waits for the decision', async () => {
     const g = stubGh({
       ...waiting,
+      [JOBS]: job('waiting'),
       'POST repos/kanon-e2e/harness/issues': { number: 3 },
       [`GET repos/${REPO}/actions/runs/77/approvals`]: inTurn([], [{ state: 'approved', environments: [{ name: 'production' }] }]),
       'PATCH repos/kanon-e2e/harness/issues/3': {},
@@ -294,11 +324,82 @@ describe('deployment.await-approval', () => {
     expect(filed.body.body).toContain(`https://github.com/${REPO}/actions/runs/77`);
     expect(filed.body.body).toContain(RELEASE);
     expect(g.writes().at(-1)).toMatchObject({ key: 'PATCH repos/kanon-e2e/harness/issues/3', body: { state: 'closed' } });
-    expect(ctx.state.approvals).toEqual({ production: { run: 77, decision: 'approved' } });
+    expect(ctx.state.approvals).toEqual({ production: { run: 77, decision: 'approved', jobs: ['production / deploy'] } });
   });
 
   it('fails when no job waits on the environment by the deadline', async () => {
     const g = stubGh({ [`GET repos/${REPO}/actions/runs?status=waiting&per_page=100`]: { workflow_runs: [] } });
     await expect(run('deployment.await-approval', { environment: 'production', deadline: 1 }, context({ gh: g.gh }))).rejects.toMatchObject({ name: 'Fail' });
+  });
+});
+
+describe('environment.create', () => {
+  const ENV = `PUT repos/${REPO}/environments/production`;
+  const POLICIES = `repos/${REPO}/environments/production/deployment-branch-policies`;
+
+  it('creates the environment with the release tags alone as its refs, no admin bypass, and the Owner as its required reviewer with self-review prevented', async () => {
+    const g = stubGh({
+      'GET users/yedeya': { id: 41, login: 'yedeya' },
+      [ENV]: {},
+      [`GET ${POLICIES}?per_page=100`]: { total_count: 0, branch_policies: [] },
+      [`POST ${POLICIES}`]: {},
+    });
+    await run('environment.create', { name: 'production', tags: 'v*.*.*', reviewer: true }, context({ gh: g.gh }));
+    expect(g.writes().map((c) => [c.key, c.body])).toEqual([
+      [ENV, { wait_timer: 0, prevent_self_review: true, reviewers: [{ type: 'User', id: 41 }], deployment_branch_policy: { protected_branches: false, custom_branch_policies: true }, can_admins_bypass: false }],
+      [`POST ${POLICIES}`, { name: 'v*.*.*', type: 'tag' }],
+    ]);
+  });
+
+  it('without a reviewer, names none, and reads no user', async () => {
+    const g = stubGh({
+      [`PUT repos/${REPO}/environments/staging`]: {},
+      [`GET repos/${REPO}/environments/staging/deployment-branch-policies?per_page=100`]: { total_count: 0, branch_policies: [] },
+      [`POST repos/${REPO}/environments/staging/deployment-branch-policies`]: {},
+    });
+    await run('environment.create', { name: 'staging', tags: 'v*.*.*' }, context({ gh: g.gh }));
+    expect(g.calls.some((c) => c.path.startsWith('users/'))).toBe(false);
+    expect(g.writes()[0].body).toEqual({ wait_timer: 0, deployment_branch_policy: { protected_branches: false, custom_branch_policies: true }, can_admins_bypass: false });
+  });
+
+  it('adds the tag rule only once', async () => {
+    const g = stubGh({
+      [`PUT repos/${REPO}/environments/staging`]: {},
+      [`GET repos/${REPO}/environments/staging/deployment-branch-policies?per_page=100`]: { total_count: 1, branch_policies: [{ name: 'v*.*.*', type: 'tag' }] },
+    });
+    await run('environment.create', { name: 'staging', tags: 'v*.*.*' }, context({ gh: g.gh }));
+    expect(g.writes().map((c) => c.key)).toEqual([`PUT repos/${REPO}/environments/staging`]);
+  });
+
+  it('reads the reviewer\'s login from runner/settings.json, not from the scenario', () => {
+    const settings = JSON.parse(readFileSync(new URL('../runner/settings.json', import.meta.url), 'utf8'));
+    expect(settings.environmentReviewer).toBe('yedeya');
+    expect(settings.$sources.environmentReviewer).toMatch(/decision 9/);
+    expect(Object.keys(VOCABULARY['environment.create'].args).sort()).toEqual(['name', 'reviewer', 'tags']);
+  });
+});
+
+describe('ruleset.tags', () => {
+  const routes = (have = []) => ({
+    [`GET repos/${REPO}/rulesets?per_page=100`]: [have],
+    'GET apps/kanon-e2e-releaser': { id: 900, slug: 'kanon-e2e-releaser' },
+    [`POST repos/${REPO}/rulesets`]: { id: 8 },
+  });
+
+  it('creates an active tag ruleset on the pattern with the creation, update and deletion rules, the named test Apps bypassing it', async () => {
+    const g = stubGh(routes());
+    await run('ruleset.tags', { pattern: 'v*.*.*', bypass: ['releaser'] }, context({ gh: g.gh }));
+    expect(g.writes().map((c) => [c.key, c.body])).toEqual([[`POST repos/${REPO}/rulesets`, {
+      name: 'Release tags', target: 'tag', enforcement: 'active',
+      conditions: { ref_name: { include: ['refs/tags/v*.*.*'], exclude: [] } },
+      rules: [{ type: 'creation' }, { type: 'update' }, { type: 'deletion' }],
+      bypass_actors: [{ actor_id: 900, actor_type: 'Integration', bypass_mode: 'always' }],
+    }]]);
+  });
+
+  it('creates nothing when the repository already has it', async () => {
+    const g = stubGh(routes([{ id: 8, name: 'Release tags', target: 'tag' }]));
+    await run('ruleset.tags', { pattern: 'v*.*.*', bypass: ['releaser'] }, context({ gh: g.gh }));
+    expect(g.writes()).toEqual([]);
   });
 });

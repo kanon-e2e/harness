@@ -20,6 +20,7 @@
 // { cwd })`, each resolving to `{ status, stdout, stderr }`, and `now()` and `sleep(ms)`.
 
 import deploymentAwaitApproval from './verbs/deployment-await-approval.mjs';
+import environmentCreate from './verbs/environment-create.mjs';
 import expectApi from './verbs/expect-api.mjs';
 import expectArtifact from './verbs/expect-artifact.mjs';
 import expectCheck from './verbs/expect-check.mjs';
@@ -29,6 +30,7 @@ import expectIssue from './verbs/expect-issue.mjs';
 import expectPr from './verbs/expect-pr.mjs';
 import expectRun from './verbs/expect-run.mjs';
 import filesCommit from './verbs/files-commit.mjs';
+import issueAwait from './verbs/issue-await.mjs';
 import issueLabel from './verbs/issue-label.mjs';
 import issueOpen from './verbs/issue-open.mjs';
 import kanonAt from './verbs/kanon-at.mjs';
@@ -41,6 +43,7 @@ import prOpen from './verbs/pr-open.mjs';
 import registerWrite from './verbs/register-write.mjs';
 import releaseCut from './verbs/release-cut.mjs';
 import repoApply from './verbs/repo-apply.mjs';
+import rulesetTags from './verbs/ruleset-tags.mjs';
 import runAwait from './verbs/run-await.mjs';
 import workflowDispatch from './verbs/workflow-dispatch.mjs';
 
@@ -49,6 +52,7 @@ const ALL = [
   prOpen, prLabel, prMerge, issueOpen, issueLabel, workflowDispatch, releaseCut,
   deploymentAwaitApproval, runAwait, expectInit, expectDoctor, expectRun, expectCheck,
   expectIssue, expectPr, expectArtifact, expectApi,
+  environmentCreate, rulesetTags, issueAwait,
 ];
 
 /** Every verb, by name. @type {Readonly<Record<string, any>>} */

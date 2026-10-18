@@ -1,0 +1,9 @@
+{
+  "id": "deploy-rehearsal",
+  "family": "deploy",
+  "tier": "none",
+  "gate": false,
+  "apps": ["releaser"],
+  "claude": "none",
+  "deadlineMinutes": 100
+}

@@ -23,6 +23,7 @@
   "nightlyFloorDays": 7,
   "checkName": "kanon-e2e",
   "reporterAppSlug": "kanon-e2e-reporter",
+  "environmentReviewer": "yedeya",
   "schedules": {
     "poll": "*/15 * * * *",
     "nightly": "7 3 * * *"
@@ -41,6 +42,7 @@
     "neutralRerunAfterMinutes": "Plan 0012 §7: a neutral check run is re-run by the poll, at most hourly.",
     "nightlyFloorDays": "Plan 0012 §7, decision 4: a nightly runs when Kanon's main changed, or when no nightly ran in seven days.",
     "reporterAppSlug": "E0's item 13 (Kanon #968): the Reporter's check run carries the App kanon-e2e-reporter.",
+    "environmentReviewer": "Plan 0012 decision 9: the Owner approves a candidate's production deployment, so environment.create names the Owner's login as a production environment's required reviewer, the login probe 7 (.github/workflows/probe-07-release-approval.yml, Kanon #968) takes as its reviewer by default.",
     "schedules": "Plan 0012 §7: the poll every 15 minutes (decision 19), and the nightly once a day, off the poll's minutes so the two never fire together."
   }
 }

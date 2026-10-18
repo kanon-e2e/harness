@@ -38,8 +38,8 @@ scenarios/<scenario>/
 **The vocabulary is closed** (§4.2). Each verb belongs to one kind of segment:
 
 - **`kanon` segments only:** the verbs that run Kanon's code, at the release under test, as an adopter fetches it: `kanon.init`, `kanon.doctor`, `kanon.at`, `register.write`, `pins.move`.
-- **`act` segments only:** the verbs that write to GitHub with the harness's own code: `repo.apply`, `files.commit`, `pr.open`, `pr.label`, `pr.merge`, `issue.open`, `issue.label`, `workflow.dispatch`, `release.cut`, `deployment.await-approval`.
-- **Either:** the verbs that only read: `run.await`, `expect.init`, `expect.doctor`, `expect.run`, `expect.check`, `expect.issue`, `expect.pr`, `expect.artifact`, `expect.api`.
+- **`act` segments only:** the verbs that write to GitHub with the harness's own code: `repo.apply`, `files.commit`, `pr.open`, `pr.label`, `pr.merge`, `issue.open`, `issue.label`, `workflow.dispatch`, `release.cut`, `deployment.await-approval`, `environment.create`, `ruleset.tags`.
+- **Either:** the verbs that only read: `run.await`, `issue.await`, `expect.init`, `expect.doctor`, `expect.run`, `expect.check`, `expect.issue`, `expect.pr`, `expect.artifact`, `expect.api`.
 
 A verb that waits takes a `deadline` in minutes, and polls. [`scenarios/README.md`](scenarios/README.md) lists every verb: what it does, its arguments, and whether it waits.
 
@@ -53,6 +53,24 @@ A verb that waits takes a `deadline` in minutes, and polls. [`scenarios/README.m
 4. Add a `describe('<verb>', …)` block to the `tests/verbs-<kind>.test.mjs` file for its kind.
 
 Everything under `runner/`, the verbs, the validator and the known markers included, runs with the driver's token. So every such pull request is the Owner's to merge ([`docs/qa/escalation-paths.md`](docs/qa/escalation-paths.md)).
+
+## The catalogue
+
+Each scenario's own README says what it sets up, what each step expects, what it creates and costs, and what a red result usually means.
+
+**`deploy-rehearsal`** ([`scenarios/deploy-rehearsal/`](scenarios/deploy-rehearsal/README.md), family `deploy`, no model, `gate: false`). Kanon's deploy lane, end to end, in a repository with `staging` then `production`. It repeats plan 0010's D12 rehearsal, done once by hand at v0.40.0, on every candidate and every nightly. It cuts three releases:
+
+1. The first goes through the gate, the trust probe and the build, then deploys to staging, and every `record` and `report` job runs. `production` then waits for its reviewer. The run must list the job names the reference deploy declares.
+2. The second has a failing smoke check: the lane must file staging's issue.
+3. The third succeeds, and must close that issue.
+
+Doctor must report no `deploy.*` finding.
+
+The approval differs by trigger. On a candidate's run, the scenario files the Owner's approval request in this repository and waits for the Owner to approve `production`: one approval per candidate (decision 9). On a nightly or a dispatch, it cancels the run at production's wait, and holds production's deploy job to ending `cancelled`. Dispatch it on its own:
+
+```sh
+gh workflow run e2e.yml -R kanon-e2e/harness -f release=v0.40.2 -f select=deploy-rehearsal
+```
 
 ## Runs
 
@@ -76,6 +94,7 @@ Everything under `runner/`, the verbs, the validator and the known markers inclu
 - `tests/scenario-format.test.mjs` validates every directory under `scenarios/`, and holds the validator to the format above: each rule it refuses, by name.
 - `tests/vocabulary.test.mjs` holds the vocabulary to plan 0012 §4.2: the closed set, each verb's segment kind, the deadline and backoff of every verb that waits, Kanon's code run only through `npx` at the release, the known markers, and the two tables of verbs.
 - `tests/verbs-kanon.test.mjs`, `tests/verbs-act.test.mjs` and `tests/verbs-read.test.mjs` test each verb on a stubbed `gh`, `npx` and `git`.
+- `tests/deploy-rehearsal.test.mjs` holds `scenarios/deploy-rehearsal/` to its issue's acceptance criteria (#26). Those are its three releases and what each expects, the environments and the tag ruleset before the first, production's wait, the run's job names, and every `deploy.*` finding held absent.
 - `tests/workflows.test.mjs` holds the harness's workflows to plan 0012 §5.2: no job that holds an App key runs someone else's code, each environment is named only by the jobs §5.2 lists and the probes, no `-job` workflow names a private key, and no workflow runs on a pull-request event with a secret, other than those Kanon's own lane callers map by name into their lane.
 - `tests/e2e-workflows.test.mjs` holds `e2e.yml` and its pairs to plan 0012 §5.2: the jobs, their order and conditions, each pair's mint and token, the read-only `kanon` token, an `act` job that runs no Kanon code, and every matrix's max-parallel and every job's timeout held to `runner/settings.json`.
 - `tests/runner.test.mjs` tests the runner a segment at a time on a stubbed `gh` and `npx` and a real `git`: pass, fail and infra, the retries, the state, and how the repository ends.
