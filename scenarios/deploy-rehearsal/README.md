@@ -2,7 +2,7 @@
 
 Kanon's plan 0010 ended with D12: a person took one repository through the deploy lane by hand, release by release, at v0.40.0. This scenario is plan 0012's step E5: the same rehearsal, automated, run on every candidate and every nightly. It installs the deploy lane for `staging` then `production` in a fresh repository, cuts three releases through it, and holds each run to what the lane promises. It runs on GitHub alone: the hooks touch no cloud, and no credential is involved.
 
-`scenario.json`: family `deploy`, tier `none`, Claude `none`, two test Apps, the Judge and the Releaser, and `gate: false`. It counts toward the release gate only after ten consecutive passes, scheduled or dispatched (Kanon plan 0012 decision 24), and the Owner's decision.
+`scenario.json`: family `deploy`, tier `none`, Claude `none`, two test Apps, the Judge and the Releaser, and `gate: true`: it burnt in with ten passes in a row, scheduled or dispatched (Kanon plan 0012 decision 24), so its result counts toward the release gate on every candidate.
 
 ## What the repository holds
 

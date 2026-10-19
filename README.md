@@ -58,7 +58,7 @@ Everything under `runner/`, the verbs, the validator and the known markers inclu
 
 Each scenario's own README says what it sets up, what each step expects, what it creates and costs, and what a red result usually means. Each entry here shows its `gate` value, which the pull request that turns it `true` updates.
 
-**`deploy-rehearsal`** ([`scenarios/deploy-rehearsal/`](scenarios/deploy-rehearsal/README.md), family `deploy`, no model, `gate: false`). Kanon's deploy lane, end to end, in a repository with `staging` then `production`. It repeats plan 0010's D12 rehearsal, done once by hand at v0.40.0, on every candidate and every nightly. It cuts three releases:
+**`deploy-rehearsal`** ([`scenarios/deploy-rehearsal/`](scenarios/deploy-rehearsal/README.md), family `deploy`, no model, `gate: true`). Kanon's deploy lane, end to end, in a repository with `staging` then `production`. It repeats plan 0010's D12 rehearsal, done once by hand at v0.40.0, on every candidate and every nightly. It cuts three releases:
 
 1. The first goes through the gate, the trust probe and the build, then deploys to staging, and every `record` and `report` job runs. `production` then waits for its reviewer. The run must list the job names the reference deploy declares.
 2. The second has a failing smoke check: the lane must file staging's issue.
