@@ -12,6 +12,7 @@ What `e2e.yml` runs, which job holds which secret, how big a run may be, and wha
 | `model-key` | `e2e` (`mint`), `e2e-model` (the job) | the driver's key (`mint`); the real-model token (the job) | For each `claude: subscription` scenario: writes `CLAUDE_CODE_OAUTH_TOKEN` into its repository. |
 | `kanon-1` … `kanon-3` | `e2e` (`mint`) | the driver's key (`mint`); a read-only token (the job) | Phase *n*'s `kanon` segment: Kanon's code at the release under test, in a clone. |
 | `act-1` … `act-3` | `e2e` (`mint`) | the driver's key (`mint`); the act token (the job) | Phase *n*'s `act` segment: the harness's code, pushing what Kanon wrote and doing the rest. The job that learns the result ends the repository. |
+| `gate-2`, `gate-3` | none | the workflow's own token, `contents: read`; no key | Before phase *n*'s `kanon` job: decides the scenarios phase *n* runs (`runner/gate.mjs`, #62). It drops a scenario with fewer than *n* phases, and one whose `kanon-e2e-result-<scenario>` names this attempt's repository, because an earlier phase ended it and its repository was deleted or archived. Phase *n*'s `kanon` and `act` jobs take their matrix from it, and are skipped when it keeps none, so no mint is scoped to a repository that may be gone. It never fails for what it drops. |
 | `verdict` | none | the workflow's own token, `contents: read` and `issues: write` on this repository; no key | Reads each scenario's `kanon-e2e-result/v1` and writes `verdict.json` (`kanon-e2e-verdict/v1`): `pass`, `fail` or `infra-only`, over the scenarios with `gate: true` on a candidate's run and over every planned scenario elsewhere (`runner/verdict.mjs`). On a candidate's run only, files, edits or closes the candidate's red issue and the `the Reporter can't post` issue. Red unless `pass`. |
 | `report` | `e2e-report` | the Reporter's key | Whenever `start` created a check run: completes it, `success` for `pass`, `failure` for `fail`, `neutral` for anything else, retrying a failed call twice. Its summary links this run and, when there is one, the candidate's red issue. |
 
@@ -60,11 +61,11 @@ A call to GitHub, by `gh` or by `git`'s clone, fetch, push and ls-remote, that f
 
 **One run at a time** (the Owner, 2026-10-17). So a run is sized against the organisation's limits alone, not shared with a second run. A job that `needs:` a matrix waits for all its entries. With 2 at once, each stage runs in waves of 2. A repository lives from its `provision` to the last wave of `act-3`. With *W* = ⌈*n* / 2⌉ waves and at most two real-model scenarios, its longest running time is
 
-*W* × 10 (provision) + ⌈min(*n*, 2) / 2⌉ × 10 (model key) + 3 × *W* × (25 + 35) (each phase's `kanon` and `act` pairs, mint included).
+*W* × 10 (provision) + ⌈min(*n*, 2) / 2⌉ × 10 (model key) + 3 × *W* × (25 + 35) (each phase's `kanon` and `act` pairs, mint included) + 2 × 5 (`gate-2` and `gate-3`, one job each, not in waves).
 
-The **catalogue's cap** is the largest *n* whose longest running time fits the nightly interval and whose 2*n* repositories (each scenario, and its re-run) fit the hour's 80. That is **14 scenarios**. 14 scenarios take **22 h 20 min**, so a run ends inside the 24 hours before the next nightly. `plan` refuses a catalogue past the cap.
+The **catalogue's cap** is the largest *n* whose longest running time fits the nightly interval and whose 2*n* repositories (each scenario, and its re-run) fit the hour's 80. That is **14 scenarios**. 14 scenarios take **22 h 30 min**, so a run ends inside the 24 hours before the next nightly. `plan` refuses a catalogue past the cap.
 
-**The janitor's cut-offs** follow: the longest running time at the cap, plus 100 minutes' margin for queueing, is **24 h**. A repository with `kanon-e2e-failed` gets 24 hours more, **48 h**. It runs hourly (`e2e-janitor.yml`). It deletes only repositories with the `kanon-e2e` topic, never the harness. Its run fails, by name, on a repository older than a day that it couldn't delete.
+**The janitor's cut-offs** follow: the longest running time at the cap, plus 100 minutes' margin for queueing, is **24 h 10 min**. A repository with `kanon-e2e-failed` gets 24 hours more, **48 h 10 min**. It runs hourly (`e2e-janitor.yml`). It deletes only repositories with the `kanon-e2e` topic, never the harness. Its run fails, by name, on a repository older than a day that it couldn't delete.
 
 Change a setting and the tests name each place that must follow: the max-parallel on each matrix, each job's `timeout-minutes`, and the cut-offs.
 
