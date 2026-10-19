@@ -33,7 +33,7 @@ const load = (id) => {
 const files = (dir, here = dir) => readdirSync(here).flatMap((n) => (statSync(join(here, n)).isDirectory() ? files(dir, join(here, n)) : [relative(dir, join(here, n))])).sort();
 
 /** The scenarios that burnt in and gate (#43): each turned `gate: true` in its own pull request. */
-const GATED = new Set(['install-build']);
+const GATED = new Set(['install-build', 'install-full']);
 
 describe.each(Object.entries(SCENARIOS))('%s', (id, { feature, apps }) => {
   const s = load(id);
