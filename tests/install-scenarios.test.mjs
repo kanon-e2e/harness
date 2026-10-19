@@ -66,9 +66,9 @@ describe.each(Object.entries(SCENARIOS))('%s', (id, { feature, apps }) => {
     for (const a of applies) expect(a.firstCommit).toBe(true);
   });
 
-  it('phase 1, act: one push to the default branch, then the settings, apps-check, Lane check on the push, then the Lane check rule', () => {
+  it('phase 1, act: one push of what init wrote, the bootstrap line, then the settings, apps-check, Lane check on the push, the Lane check rule, and the approval that ends bootstrap', () => {
     expect(s.phases[0].act.map((x) => x.verb)).toEqual([
-      'files.commit', 'repo.apply', 'workflow.dispatch', 'run.await', 'expect.run', 'run.await', 'expect.check', 'repo.apply',
+      'files.commit', 'bootstrap.end', 'repo.apply', 'workflow.dispatch', 'run.await', 'expect.run', 'run.await', 'expect.check', 'repo.apply', 'bootstrap.end',
     ]);
     const [commit] = s.ofVerb('files.commit');
     expect(commit).toMatchObject({ from: 'kanon' });
@@ -83,8 +83,21 @@ describe.each(Object.entries(SCENARIOS))('%s', (id, { feature, apps }) => {
 
   it('pushes to the default branch only before the ruleset exists, since it lets no one bypass it', () => {
     const [firstApply] = s.ofVerb('repo.apply');
-    for (const c of s.ofVerb('files.commit')) expect(at(c)).toBeLessThan(at(firstApply));
+    const record = s.ofVerb('bootstrap.end').find((x) => x.move === 'record');
+    for (const c of [...s.ofVerb('files.commit'), record]) expect(at(c)).toBeLessThan(at(firstApply));
     expect(s.ofVerb('pr.open')).toEqual([]);
+  });
+
+  it('ends bootstrap as an adopter does, before phase 2\'s doctor: the `ended` line in the adoption record, then one required approving review, dismissed on push (Kanon\'s docs/install.md, K-ADOPT-6)', () => {
+    const ends = s.ofVerb('bootstrap.end');
+    expect(ends.map((x) => x.move)).toEqual(['record', 'approval']);
+    const [record, approval] = ends;
+    const [commit] = s.ofVerb('files.commit');
+    const [, secondApply] = s.ofVerb('repo.apply');
+    expect(at(record)).toBe(at(commit) + 1);
+    expect(at(approval)).toBeGreaterThan(at(secondApply));
+    expect(ends.every((x) => x.phase === 1 && x.segment === 'act')).toBe(true);
+    expect(at(approval)).toBeLessThan(at(s.ofVerb('kanon.doctor')[0]));
   });
 
   it('expect.run: the apps-check run concluded success, with a job for every App the scenario lists', () => {
@@ -99,16 +112,26 @@ describe.each(Object.entries(SCENARIOS))('%s', (id, { feature, apps }) => {
     expect(s.phases[1].act).toEqual([]);
     const [e] = s.ofVerb('expect.doctor');
     expect(e).toMatchObject({ status: 'incomplete', exitCode: 4, unchecked: ['secrets'] });
+    expect(e.findings).toBeUndefined();
     expect(e.fields).toEqual(expect.arrayContaining([
       { pointer: '/releases/pins', equals: ['{{release}}'] },
       { pointer: '/releases/pinned', equals: '{{release}}' },
     ]));
   });
 
+  it('expect.doctor: bootstrap ended, so neither its reminder nor its guard is reported, and both stay failures', () => {
+    const [e] = s.ofVerb('expect.doctor');
+    expect(e.absent).toEqual(expect.arrayContaining(['ruleset.bootstrap-can-end', 'ruleset.approval-off']));
+  });
+
   it('has a README in the style of probes/README.md, and an entry in the catalogue', () => {
     const readme = s.read('README.md');
     for (const heading of ['The flags', 'The steps', 'What it creates', 'What it costs', 'When it is red']) expect(readme).toMatch(new RegExp(`^## ${heading}`, 'm'));
     expect(readme).toContain(`--feature=${feature}`);
+    const table = readme.slice(readme.indexOf('## The steps'), readme.indexOf('## What it creates'));
+    expect(table).toMatch(/\| 1 \| `act` \| `bootstrap\.end` with `record`/);
+    expect(table).toMatch(/\| 1 \| `act` \| `bootstrap\.end` with `approval`/);
+    expect(table).toContain('`ruleset.bootstrap-can-end`');
     expect(readFileSync(join(ROOT, 'README.md'), 'utf8')).toContain(`[\`${id}/\`](scenarios/${id}/README.md)`);
   });
 });

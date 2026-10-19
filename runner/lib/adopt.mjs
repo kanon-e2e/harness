@@ -5,6 +5,8 @@
 // Kanon's surfaces as doctor's `ruleset.missing` or `ruleset.rule-missing`, or a missing label;
 // doctor checks neither the milestones nor the merge settings (plan 0012 §11).
 
+import { api, repoPath } from './gh.mjs';
+
 /**
  * `K-ADOPT-1` step 5 (`K-SHIP-3`): squash merge only, the pull request's title and body as the
  * commit's, for `merge.settings`. `provision` sets them before this, from the release's own guard
@@ -35,7 +37,8 @@ export const CHECK_RULE = Object.freeze({
 
 /**
  * `K-ADOPT-1` step 8: the default branch's ruleset, without the required check (added by the
- * second `repo.apply`): a pull request with no required approval yet (bootstrap, `K-ADOPT-6`),
+ * second `repo.apply`): a pull request with no required approval yet (bootstrap, `K-ADOPT-6`,
+ * until `bootstrap.end` requires one),
  * squash only, no force-push or deletion, and the merge queue where the plan has one.
  * @param {boolean} mergeQueue
  */
@@ -74,6 +77,12 @@ export const rulesetBody = (mergeQueue) => ({
       : []),
   ],
 });
+
+/** The adoption record, whose `## Bootstrap` line `bootstrap.end` rewrites (`K-LAYOUT-10`). */
+export const ADOPTION_RECORD = 'docs/qa/adoption.md';
+
+/** The ruleset `init` would have made, or null. @param {any} ctx */
+export const findRuleset = async (ctx) => (await api(ctx, repoPath(ctx, 'rulesets?per_page=100'), { paginate: true })).find((/** @type {any} */ r) => r.name === RULESET_NAME) ?? null;
 
 /** A label of requirements.json that names a family (`signal:<name>`, `project:<n>`), not one label. @param {string} name */
 export const isLabelTemplate = (name) => /<[^>]*>/.test(name);

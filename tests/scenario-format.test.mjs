@@ -205,6 +205,18 @@ describe('the closed vocabulary, each verb in its kind of segment (§4.2)', () =
     expect(validateSteps(onePhase([{ verb: 'kanon.init' }], [apply, apply, apply])).join('\n')).toMatch(/at most twice/);
   });
 
+  it('refuses bootstrap.end\'s approval before its record, and either move twice: once the ruleset requires an approval, no push reaches the default branch without one', () => {
+    const record = { verb: 'bootstrap.end', move: 'record' };
+    const approval = { verb: 'bootstrap.end', move: 'approval' };
+    expect(validateSteps(onePhase([], [record, approval]))).toEqual([]);
+    expect(validateSteps(onePhase([], [approval])).join('\n')).toMatch(/`approval`.*no earlier `record`/);
+    expect(validateSteps(onePhase([], [approval, record])).join('\n')).toMatch(/`approval`.*no earlier `record`/);
+    expect(validateSteps(onePhase([], [record, record, approval])).join('\n')).toMatch(/`record` runs once/);
+    expect(validateSteps(onePhase([], [record, approval, approval])).join('\n')).toMatch(/`approval` runs once/);
+    expect(stepErrors({ verb: 'bootstrap.end' }, 'act').join('\n')).toMatch(/`move`/);
+    expect(stepErrors({ verb: 'bootstrap.end', move: 'record' }, 'kanon').join('\n')).toMatch(/only in an `act` segment/);
+  });
+
   it('refuses kanon.init flags that would undo what the verb fixes: JSON, no Apps, telemetry and sharing declined', () => {
     for (const flag of ['--telemetry', '--consent=yes', '--upstream-findings=sent', '--create-apps', '--dry-run', '--help']) {
       expect(stepErrors({ verb: 'kanon.init', flags: [flag] }, 'kanon').join('\n')).toMatch(/flag/);
@@ -357,6 +369,7 @@ const EVERY_VERB = {
       ],
       act: [
         { verb: 'files.commit', from: 'kanon', message: 'Install Kanon' },
+        { verb: 'bootstrap.end', move: 'record' },
         { verb: 'repo.apply' },
         { verb: 'environment.create', name: 'production', tags: 'v*.*.*', reviewer: true },
         { verb: 'ruleset.tags', pattern: 'v*.*.*', bypass: ['releaser'] },
@@ -374,6 +387,7 @@ const EVERY_VERB = {
         { verb: 'expect.issue', issue: 'bug', state: 'open', labels: ['bug', 'sev:low'], deadline: 5 },
         { verb: 'workflow.dispatch', workflow: 'apps-check.yml', inputs: { reason: 'scenario' } },
         { verb: 'repo.apply' },
+        { verb: 'bootstrap.end', move: 'approval' },
       ],
     },
     {

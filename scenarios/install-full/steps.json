@@ -8,19 +8,21 @@
       ],
       "act": [
         { "verb": "files.commit", "from": "kanon", "message": "Install Kanon's full feature" },
+        { "verb": "bootstrap.end", "move": "record" },
         { "verb": "repo.apply", "firstCommit": true },
         { "verb": "workflow.dispatch", "workflow": "apps-check.yml" },
         { "verb": "run.await", "name": "apps-check", "workflow": "apps-check.yml", "event": "workflow_dispatch", "branch": "main", "deadline": 10 },
         { "verb": "expect.run", "run": "apps-check", "conclusion": "success", "jobs": [{ "name": "apps / Author", "conclusion": "success" }, { "name": "apps / Judge", "conclusion": "success" }], "deadline": 2 },
         { "verb": "run.await", "name": "ci", "workflow": "ci.yml", "event": "push", "branch": "main", "deadline": 10 },
         { "verb": "expect.check", "branch": "main", "name": "Lane check", "conclusion": "success", "deadline": 5 },
-        { "verb": "repo.apply", "firstCommit": true }
+        { "verb": "repo.apply", "firstCommit": true },
+        { "verb": "bootstrap.end", "move": "approval" }
       ]
     },
     {
       "kanon": [
         { "verb": "kanon.doctor" },
-        { "verb": "expect.doctor", "status": "incomplete", "exitCode": 4, "unchecked": ["secrets"], "fields": [{ "pointer": "/releases/pins", "equals": ["{{release}}"] }, { "pointer": "/releases/pinned", "equals": "{{release}}" }] }
+        { "verb": "expect.doctor", "status": "incomplete", "exitCode": 4, "unchecked": ["secrets"], "absent": ["ruleset.bootstrap-can-end", "ruleset.approval-off"], "fields": [{ "pointer": "/releases/pins", "equals": ["{{release}}"] }, { "pointer": "/releases/pinned", "equals": "{{release}}" }] }
       ],
       "act": []
     }

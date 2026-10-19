@@ -19,6 +19,7 @@
 // already taken as data), `state` (the run's state, JSON), `gh(args, input)` and `exec(cmd, args,
 // { cwd })`, each resolving to `{ status, stdout, stderr }`, and `now()` and `sleep(ms)`.
 
+import bootstrapEnd from './verbs/bootstrap-end.mjs';
 import deploymentAwaitApproval from './verbs/deployment-await-approval.mjs';
 import environmentCreate from './verbs/environment-create.mjs';
 import expectApi from './verbs/expect-api.mjs';
@@ -52,7 +53,7 @@ const ALL = [
   prOpen, prLabel, prMerge, issueOpen, issueLabel, workflowDispatch, releaseCut,
   deploymentAwaitApproval, runAwait, expectInit, expectDoctor, expectRun, expectCheck,
   expectIssue, expectPr, expectArtifact, expectApi,
-  environmentCreate, rulesetTags, issueAwait,
+  environmentCreate, rulesetTags, issueAwait, bootstrapEnd,
 ];
 
 /** Every verb, by name. @type {Readonly<Record<string, any>>} */
