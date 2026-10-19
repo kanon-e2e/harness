@@ -18,7 +18,7 @@
 // name: `ruleset.create`, then `ruleset.require-check` (#55). Without it, `ruleset.first-commit`
 // applies nothing, as before.
 
-import { BUCKETS, CHECK_RULE, LANE_CHECK, MERGE_SETTINGS, RULESET_NAME, isLabelTemplate, rulesetBody } from '../lib/adopt.mjs';
+import { BUCKETS, CHECK_RULE, LANE_CHECK, MERGE_SETTINGS, RULESET_NAME, findRuleset as ruleset, isLabelTemplate, rulesetBody } from '../lib/adopt.mjs';
 import { bool } from '../lib/args.mjs';
 import { api, repoPath } from '../lib/gh.mjs';
 import { kept } from '../lib/state.mjs';
@@ -62,9 +62,6 @@ const APPLY = {
     await api(ctx, repoPath(ctx, `rulesets/${found.id}`), { method: 'PUT', body: { rules } });
   },
 };
-
-/** The ruleset `init` would have made, or null. @param {any} ctx */
-const ruleset = async (ctx) => (await api(ctx, repoPath(ctx, 'rulesets?per_page=100'), { paginate: true })).find((/** @type {any} */ r) => r.name === RULESET_NAME) ?? null;
 
 export default {
   verb: 'repo.apply',

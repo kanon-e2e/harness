@@ -126,6 +126,8 @@ export function validateSteps(steps, scope = {}) {
   /** What earlier steps made, by kind. @type {Record<string, Set<string>>} */
   const made = { prs: new Set(), issues: new Set(), runs: new Set(), documents: new Set() };
   let applies = 0;
+  /** `bootstrap.end`'s moves so far. @type {Set<string>} */
+  const ends = new Set();
   phases.forEach((phase, i) => {
     if (!isObject(phase)) return p.push(`phases[${i}] must be an object with a \`kanon\` and an \`act\` segment`);
     for (const k of Object.keys(phase)) if (!SEGMENTS.includes(/** @type {any} */ (k))) p.push(`phases[${i}]: \`${k}\` is not a segment: a phase is a \`kanon\` segment then an \`act\` segment`);
@@ -140,6 +142,11 @@ export function validateSteps(steps, scope = {}) {
         if (!isObject(step) || typeof step.verb !== 'string') return p.push(`${where}: a step is an object that names its \`verb\``);
         const errors = stepProblems(step, segment, made, scope);
         if (step.verb === 'repo.apply' && ++applies > 2) errors.push('`repo.apply` runs at most twice: the first applies the settings init leaves, the second the `Lane check` rule');
+        if (step.verb === 'bootstrap.end' && typeof step.move === 'string') {
+          if (ends.has(step.move)) errors.push(`\`${step.move}\` runs once`);
+          if (step.move === 'approval' && !ends.has('record')) errors.push('`approval` has no earlier `record`: once the ruleset requires an approval, the record can\'t reach the default branch without one');
+          ends.add(step.move);
+        }
         for (const e of errors) p.push(`${where} \`${step.verb}\`: ${e}`);
       });
     }

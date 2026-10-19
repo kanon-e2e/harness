@@ -487,3 +487,89 @@ describe('ruleset.tags', () => {
     expect(g.writes()).toEqual([]);
   });
 });
+
+describe('bootstrap.end', () => {
+  const git = (x) => x.calls.filter((c) => c.cmd === 'git').map((c) => c.args.filter((a) => !a.startsWith('user.')).join(' '));
+  /** The adoption record `kanon init` writes, its `## Bootstrap` line last (Kanon's cli/init.mjs). */
+  const RECORD = [
+    '# Adoption record', '', '## Choices', '', '- **Rulesets:** on this plan.', '',
+    '```', '## Bootstrap', '`in bootstrap since 2023-01-01`', '```', '',
+    '## Bootstrap', '', '`in bootstrap since 2023-11-01`', '',
+  ].join('\n');
+  /** The day the fake clock reads, 1_700_000_000_000 ms. */
+  const TODAY = '2023-11-14';
+  const RULES = [
+    { type: 'deletion' },
+    { type: 'non_fast_forward' },
+    { type: 'pull_request', parameters: { required_approving_review_count: 0, dismiss_stale_reviews_on_push: false, require_code_owner_review: false, require_last_push_approval: false, required_review_thread_resolution: false, allowed_merge_methods: ['squash'] } },
+    { type: 'required_status_checks', parameters: { strict_required_status_checks_policy: false, required_status_checks: [{ context: 'Lane check' }] } },
+  ];
+  const routes = (over = {}) => ({
+    [`GET repos/${REPO}/rulesets?per_page=100`]: [[{ id: 7, name: 'Kanon: default branch' }]],
+    [`GET repos/${REPO}/rulesets/7`]: { id: 7, name: 'Kanon: default branch', rules: RULES },
+    [`PUT repos/${REPO}/rulesets/7`]: {},
+    ...over,
+  });
+
+  it('record: writes `ended <today>` under ## Bootstrap in the adoption record, in place of `in bootstrap since`, and pushes it to the default branch (K-ADOPT-6, K-LAYOUT-10)', async () => {
+    const clone = writeTree(tempDir('clone-'), { 'docs/qa/adoption.md': RECORD });
+    const x = stubExec();
+    const ctx = context({ exec: x.exec, clone });
+    await run('bootstrap.end', { move: 'record' }, ctx);
+    expect(readFileSync(join(clone, 'docs/qa/adoption.md'), 'utf8')).toBe(RECORD.replace('`in bootstrap since 2023-11-01`', `\`ended ${TODAY}\``));
+    expect(git(x)).toEqual([
+      'fetch -q origin',
+      'checkout -q -B main origin/main',
+      'add -- docs/qa/adoption.md',
+      '-c -c commit -q -m End bootstrap: record the date in the adoption record',
+      'push -q origin HEAD:refs/heads/main',
+    ]);
+    expect(x.calls.every((c) => c.cwd === clone)).toBe(true);
+    expect(ctx.state.bootstrapEnded).toBe(TODAY);
+  });
+
+  it('record: fails by name where the record says nothing of bootstrap under ## Bootstrap, or already says it ended', async () => {
+    for (const text of ['# Adoption record\n\n`in bootstrap since 2023-11-01`\n', '## Bootstrap\n\n`ended 2023-11-02`\n']) {
+      const clone = writeTree(tempDir('clone-'), { 'docs/qa/adoption.md': text });
+      const x = stubExec();
+      await expect(run('bootstrap.end', { move: 'record' }, context({ exec: x.exec, clone }))).rejects.toThrow(/in bootstrap since/);
+      expect(git(x).filter((c) => c.startsWith('push'))).toEqual([]);
+    }
+  });
+
+  it('record: refuses an adoption record reached through a symlink, before writing a byte', async () => {
+    const clone = tempDir('clone-');
+    const outside = writeTree(tempDir('outside-'), { 'qa/adoption.md': RECORD });
+    mkdirSync(join(clone, 'docs'));
+    symlinkSync(join(outside, 'qa'), join(clone, 'docs/qa'));
+    const x = stubExec();
+    await expect(run('bootstrap.end', { move: 'record' }, context({ exec: x.exec, clone }))).rejects.toThrow(/symlink/);
+    expect(readFileSync(join(outside, 'qa/adoption.md'), 'utf8')).toBe(RECORD);
+    expect(git(x).filter((c) => c.startsWith('push'))).toEqual([]);
+  });
+
+  it('approval: requires one approving review in the ruleset, dismissed when a new commit is pushed (K-MERGE-6), its other rules sent as they are', async () => {
+    const g = stubGh(routes());
+    const ctx = context({ gh: g.gh, state: { bootstrapEnded: TODAY } });
+    await run('bootstrap.end', { move: 'approval' }, ctx);
+    const [pr] = RULES.filter((r) => r.type === 'pull_request');
+    expect(g.writes().map((c) => [c.key, c.body])).toEqual([[`PUT repos/${REPO}/rulesets/7`, {
+      rules: RULES.map((r) => (r === pr ? { ...pr, parameters: { ...pr.parameters, required_approving_review_count: 1, dismiss_stale_reviews_on_push: true } } : r)),
+    }]]);
+    expect(ctx.state.bootstrapApproval).toBe(true);
+  });
+
+  it('approval: refuses before the record says bootstrap ended, without a ruleset, and without a pull request rule', async () => {
+    await expect(run('bootstrap.end', { move: 'approval' }, context({ gh: stubGh(routes()).gh }))).rejects.toThrow(/`record`/);
+    const none = stubGh(routes({ [`GET repos/${REPO}/rulesets?per_page=100`]: [[]] }));
+    await expect(run('bootstrap.end', { move: 'approval' }, context({ gh: none.gh, state: { bootstrapEnded: TODAY } }))).rejects.toThrow(/Kanon: default branch/);
+    const noRule = stubGh(routes({ [`GET repos/${REPO}/rulesets/7`]: { id: 7, rules: [{ type: 'deletion' }] } }));
+    await expect(run('bootstrap.end', { move: 'approval' }, context({ gh: noRule.gh, state: { bootstrapEnded: TODAY } }))).rejects.toThrow(/pull request rule/);
+    expect([...none.writes(), ...noRule.writes()]).toEqual([]);
+  });
+
+  it('runs each move once', async () => {
+    await expect(run('bootstrap.end', { move: 'record' }, context({ state: { bootstrapEnded: TODAY } }))).rejects.toThrow(/once/);
+    await expect(run('bootstrap.end', { move: 'approval' }, context({ state: { bootstrapEnded: TODAY, bootstrapApproval: true } }))).rejects.toThrow(/once/);
+  });
+});
