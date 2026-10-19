@@ -31,7 +31,7 @@ A step is an object: `verb`, then the verb's arguments. A step's `name` is the n
 | `files.commit` | Commits the files of a `dir` of the scenario's (`from: scenario`), or those the `kanon` segment left (`from: kanon`), and deletes the paths in `delete`, on `branch` or the default branch, and pushes. | `act` | no |
 | `pr.open` | Opens a pull request from `head` into `base` (the default branch by default). | `act` | no |
 | `pr.label` | Adds the labels in `add` to a pull request, and removes those in `remove`. | `act` | no |
-| `pr.merge` | Merges a pull request, `via` the `front-door` (squash, with auto-merge or the merge queue, or at once where the repository doesn't allow auto-merge) or as a `bypass` actor, and waits until it merged. | `act` | yes |
+| `pr.merge` | Merges a pull request, `via` the `front-door` (into the merge queue with `enqueuePullRequest` where one sets the base's strategy, otherwise squash, with auto-merge, or at once where the repository doesn't allow auto-merge) or as a `bypass` actor, and waits until it merged. | `act` | yes |
 | `issue.open` | Opens an issue, with its `labels`. | `act` | no |
 | `issue.label` | Adds the labels in `add` to an issue. | `act` | no |
 | `workflow.dispatch` | Dispatches a `workflow`, with its `inputs`, on `ref` or the default branch. | `act` | no |
