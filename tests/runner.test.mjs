@@ -148,11 +148,18 @@ describe('a 502 is retried; a false expectation is not (§10)', () => {
   });
 
   it('isRetryable: a 5xx, a rate limit and a network error; never a 404, a 422 or a false expectation', () => {
-    for (const stderr of ['HTTP 502: Bad Gateway', 'HTTP 503', 'gh: HTTP 500: Internal Server Error', 'API rate limit exceeded for installation', 'You have exceeded a secondary rate limit', 'read: connection reset by peer', 'dial tcp: lookup api.github.com: i/o timeout']) {
+    for (const stderr of ['HTTP 502: Bad Gateway', 'HTTP 503', 'gh: HTTP 500: Internal Server Error', 'API rate limit exceeded for installation', 'You have exceeded a secondary rate limit', 'read: connection reset by peer', 'dial tcp: lookup api.github.com: i/o timeout', 'unexpected end of JSON input']) {
       expect(isRetryable({ status: 1, stderr }), stderr).toBe(true);
     }
     for (const stderr of ['HTTP 404: Not Found', 'HTTP 422: Validation Failed', 'HTTP 401: Bad credentials']) expect(isRetryable({ status: 1, stderr }), stderr).toBe(false);
     expect(isRetryable({ status: 0, stderr: 'HTTP 502' })).toBe(false);
+  });
+
+  it('a body GitHub cut off, `gh`\'s "unexpected end of JSON input", is retried three times, then reads `infra`', async () => {
+    const { result, g } = await segment({ state: kanonState(), routes: { [VARS]: fail('unexpected end of JSON input') } });
+    expect(result).toMatchObject({ result: 'infra', repositoryAction: 'deleted' });
+    expect(result.firstFailure.message).toMatch(/exited 1: unexpected end of JSON input/);
+    expect(g.calls.filter((c) => c.key === VARS)).toHaveLength(4);
   });
 
   it('retrying(): up to three retries per call, backing off, then gives the failure back', async () => {
@@ -168,6 +175,11 @@ describe('a 502 is retried; a false expectation is not (§10)', () => {
 describe('`git` to GitHub is retried as `gh` is; a transport error it outlasts is `infra` (§10)', () => {
   const BAD_GATEWAY = { status: 128, stdout: '', stderr: "fatal: unable to access 'https://github.com/kanon-e2e/e2e-sample-123-1.git/': The requested URL returned error: 502\n" };
   const REJECTED = { status: 1, stdout: '', stderr: " ! [rejected]        HEAD -> main (fetch first)\nerror: failed to push some refs to 'https://github.com/kanon-e2e/e2e-sample-123-1.git'\n" };
+  // What GitHub's git server answered the install burn-in's push with (harness #70): the push was
+  // valid, and GitHub failed to write the ref.
+  const COMMIT_REFS = { status: 1, stdout: '', stderr: "remote: fatal error in commit_refs        \nTo https://github.com/kanon-e2e/e2e-sample-123-1.git\n ! [remote rejected] HEAD -> main (failure)\nerror: failed to push some refs to 'https://github.com/kanon-e2e/e2e-sample-123-1.git'\n" };
+  const RULESET = "remote: error: GH013: Repository rule violations found for refs/heads/main.\nremote: - Changes must be made through a pull request.\nTo https://github.com/kanon-e2e/e2e-sample-123-1.git\n ! [remote rejected] HEAD -> main (push declined due to repository rule violations)\nerror: failed to push some refs to 'https://github.com/kanon-e2e/e2e-sample-123-1.git'\n";
+  const PROTECTED = "remote: error: GH006: Protected branch update failed for refs/heads/main.\nTo https://github.com/kanon-e2e/e2e-sample-123-1.git\n ! [remote rejected] HEAD -> main (protected branch hook declined)\nerror: failed to push some refs to 'https://github.com/kanon-e2e/e2e-sample-123-1.git'\n";
   const gitCalls = (calls, sub) => calls.filter((c) => c.cmd === 'git' && c.args[0] === sub);
   /** A `git` stub that answers `sub`'s calls in turn with `answers`, the last repeated: undefined runs the real git. */
   const failing = (sub, ...answers) => {
@@ -229,6 +241,30 @@ describe('`git` to GitHub is retried as `gh` is; a transport error it outlasts i
     expect(gitCalls(calls, 'push')).toHaveLength(2);
   });
 
+  it('a push GitHub failed to write, `remote: fatal error in commit_refs`, is retried three times, then reads `infra`', async () => {
+    const steps = { phases: [{ kanon: [], act: [commitStep] }] };
+    const { result, calls } = await segment({ steps, state: kanonState(), git: failing('push', undefined, COMMIT_REFS) });
+    expect(result).toMatchObject({ result: 'infra', repositoryAction: 'deleted', firstFailure: expect.objectContaining({ verb: 'files.commit', message: expect.stringMatching(/fatal error in commit_refs/) }) });
+    expect(gitCalls(calls, 'push')).toHaveLength(5);
+  });
+
+  it('`[remote rejected] … (failure)` alone is GitHub\'s failure too: retried three times, then `infra`', async () => {
+    const steps = { phases: [{ kanon: [], act: [commitStep] }] };
+    const failure = { status: 1, stdout: '', stderr: " ! [remote rejected] HEAD -> main (failure)\nerror: failed to push some refs to 'https://github.com/kanon-e2e/e2e-sample-123-1.git'\n" };
+    const { result, calls } = await segment({ steps, state: kanonState(), git: failing('push', undefined, failure) });
+    expect(result).toMatchObject({ result: 'infra', firstFailure: expect.objectContaining({ verb: 'files.commit' }) });
+    expect(gitCalls(calls, 'push')).toHaveLength(5);
+  });
+
+  it('a push a ruleset refuses is not GitHub\'s failure: asked once, and it reads `fail`', async () => {
+    const steps = { phases: [{ kanon: [], act: [commitStep] }] };
+    for (const stderr of [RULESET, PROTECTED]) {
+      const { result, calls } = await segment({ steps, state: kanonState(), git: failing('push', undefined, { status: 1, stdout: '', stderr }) });
+      expect(result, stderr).toMatchObject({ result: 'fail', repositoryAction: 'kept', firstFailure: expect.objectContaining({ verb: 'files.commit' }) });
+      expect(gitCalls(calls, 'push'), stderr).toHaveLength(2);
+    }
+  });
+
   it('isRetryable: git\'s and curl\'s wording for a 5xx and a network failure; never a rejected push, a 4xx or a refused path', () => {
     for (const stderr of [
       BAD_GATEWAY.stderr,
@@ -238,9 +274,14 @@ describe('`git` to GitHub is retried as `gh` is; a transport error it outlasts i
       'error: RPC failed; curl 56 GnuTLS recv error (-54): Error in the pull function.',
       'error: RPC failed; curl 92 HTTP/2 stream 5 was not closed cleanly: CANCEL (err 8)',
       'fatal: early EOF',
+      COMMIT_REFS.stderr,
+      'remote: fatal error in commit_refs',
+      ' ! [remote rejected] HEAD -> main (failure)',
     ]) expect(isRetryable({ status: 128, stderr }), stderr).toBe(true);
     for (const stderr of [
       REJECTED.stderr,
+      RULESET,
+      PROTECTED,
       "fatal: unable to access 'https://github.com/o/r.git/': The requested URL returned error: 403",
       'error: RPC failed; HTTP 413 curl 22 The requested URL returned error: 413',
       "remote: error: GH013: Repository rule violations found for refs/heads/main.\n ! [remote rejected] HEAD -> main (push declined due to repository rule violations)",
