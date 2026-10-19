@@ -68,9 +68,10 @@ One public repository in `kanon-e2e`, `e2e-upgrade-previous-<run>-<attempt>`, ho
 
 - the callers of the full feature's lanes, a stub `project-setup` hook, the `apps-check` and `ci.yml` callers, and the adoption record and declarations, first at the older release, then moved to the release under test, plus whatever new files the release under test's `init` writes;
 - the App register's rows for `author` and `judge`;
-- the release's labels, the bucket milestones, and the default branch's ruleset with its `Lane check` rule;
+- the release's labels, the bucket milestones, and the default branch's ruleset with its `Lane check` rule and, from the end of phase 2, one required approving review, dismissed on push;
+- the adoption record's `ended` line under `## Bootstrap`, in a second commit to the default branch before the ruleset exists;
 - one pull request, `upgrade`, merged;
-- three workflow runs: `apps-check`, `ci.yml`'s push run, and `ci.yml`'s run on the pull request. The merge's push starts one more `ci.yml` run, which no step waits for.
+- the workflow runs: `apps-check`, `ci.yml`'s run on each of phase 1's two pushes, and `ci.yml`'s run on the pull request. The merge's push starts one more `ci.yml` run, which no step waits for.
 
 The repository is deleted when the scenario passes. When it fails, it is archived for 24 hours, with the `kanon-e2e-failed` topic.
 
@@ -91,6 +92,9 @@ The failing job's summary names the first failure. What it usually means:
 - **`pins.move`.** `scripts/move-pins.mjs` failed, or is missing from the release under test.
 - **Phase 2's `expect.check` on `Lane check`.** `lane-check` at the release under test refused the upgraded tree. Most often a pin `move-pins.mjs` didn't move, or a file the new release needs that `init` didn't write.
 - **`pr.merge`.** The ruleset refused the merge: the pull request lacks something the ruleset requires (#33 if it's the check).
+- **`bootstrap.end` with `record`.** The adoption record has no `in bootstrap since` line under `## Bootstrap`: the older release's `init` wrote the record in another layout (K-LAYOUT-10), and the verb follows the newest.
+- **`bootstrap.end` with `approval`.** No ruleset named as `init` names it, or it has no pull request rule.
+- **The final `expect.doctor` on `ruleset.bootstrap-can-end`.** The ruleset still requires no approving review, or the record says `in bootstrap since` again: one of `bootstrap.end`'s moves didn't land, or phase 2's `init` rewrote the adoption record. `init` keeps an existing record today (`projectsOwn`), so a rewrite is a finding against the release under test. **On `ruleset.approval-off`:** the record says bootstrap ended, but doctor reads no required approval.
 - **The final `expect.doctor`, on a finding.** **Most often, the release pair needs a hand edit**: one that neither `move-pins.mjs` nor `init` makes, which the upgrade skill's step 4 lists for a person, such as a digest caller's `DIGEST_WEBHOOK`. That is a real finding about the upgrade. Fix it in Kanon, or in the scenario with the reason written here. Never relax the expectation.
 - **The final `expect.doctor` on `/releases/pins`, `/releases/pinned` or `pin.mixed`.** Some file still pins the older release, or pins another one: `move-pins.mjs` missed a reference, or `init` wrote one pinned elsewhere (a promoted candidate, above).
 - **The final `expect.doctor` on `unchecked`.** Another check couldn't run: the `kanon` job's token reads less than it did, or doctor needs more.
