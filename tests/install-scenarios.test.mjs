@@ -53,11 +53,17 @@ describe.each(Object.entries(SCENARIOS))('%s', (id, { feature, apps }) => {
     expect(init.flags.filter((f) => /^--(no-)?sensitive-data$/.test(f))).toHaveLength(1);
   });
 
-  it('expect.init: steps-left, the four findings repo.apply applies, and `/pin` equals {{release}}', () => {
+  it('expect.init: steps-left, the findings init reports on a repository with no commit, and `/pin` equals {{release}}', () => {
     const [e] = s.ofVerb('expect.init');
     expect(e.status).toBe('steps-left');
-    expect(e.findings).toEqual(expect.arrayContaining(['label.create', 'milestone.buckets', 'ruleset.create', 'ruleset.require-check']));
+    expect(e.findings).toEqual(['label.create', 'milestone.buckets', 'ruleset.first-commit']);
     expect(e.fields).toContainEqual({ pointer: '/pin', equals: '{{release}}' });
+  });
+
+  it('repo.apply: both calls apply what `ruleset.first-commit` leaves, the ruleset and then its `Lane check` rule', () => {
+    const applies = s.ofVerb('repo.apply');
+    expect(applies).toHaveLength(2);
+    for (const a of applies) expect(a.firstCommit).toBe(true);
   });
 
   it('phase 1, act: one push to the default branch, then the settings, apps-check, Lane check on the push, then the Lane check rule', () => {

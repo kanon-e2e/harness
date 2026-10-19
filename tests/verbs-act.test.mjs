@@ -89,6 +89,45 @@ describe('repo.apply', () => {
     await expect(run('repo.apply', {}, context({ state: { ...kept([]), repoApply: 2 } }))).rejects.toThrow(/third/);
   });
 
+  describe('`firstCommit`: init reported `ruleset.first-commit`, and the scenario pushed the first commit before this call', () => {
+    const APPLIED = ['label.create', 'milestone.buckets', 'ruleset.first-commit'];
+
+    it('first call: creates the ruleset init would on its run after the first commit (K-ADOPT-4)', async () => {
+      const g = stubGh(routes());
+      const ctx = context({ gh: g.gh, state: kept(APPLIED) });
+      await run('repo.apply', { firstCommit: true }, ctx);
+      expect(g.writes().at(-1)).toMatchObject({ key: `POST repos/${REPO}/rulesets`, body: expect.objectContaining({ name: 'Kanon: default branch' }) });
+      expect(ctx.state.applied).toEqual(['label.create', 'milestone.buckets', 'ruleset.create']);
+    });
+
+    it('second call: adds the ruleset\'s required `Lane check` rule', async () => {
+      const g = stubGh(routes({
+        [`GET repos/${REPO}/rulesets?per_page=100`]: [[{ id: 7, name: 'Kanon: default branch' }]],
+        [`GET repos/${REPO}/rulesets/7`]: RULESET,
+        [`PUT repos/${REPO}/rulesets/7`]: {},
+      }));
+      const ctx = context({ gh: g.gh, state: { ...kept(APPLIED), repoApply: 1 } });
+      await run('repo.apply', { firstCommit: true }, ctx);
+      expect(g.writes().map((c) => c.key)).toEqual([`PUT repos/${REPO}/rulesets/7`]);
+      expect(ctx.state.applied).toEqual(['ruleset.require-check']);
+    });
+
+    it('without it, `ruleset.first-commit` applies no ruleset, as before', async () => {
+      const g = stubGh(routes());
+      const ctx = context({ gh: g.gh, state: kept(APPLIED) });
+      await run('repo.apply', {}, ctx);
+      expect(g.writes().map((c) => c.key)).not.toContain(`POST repos/${REPO}/rulesets`);
+      expect(ctx.state.applied).toEqual(['label.create', 'milestone.buckets']);
+    });
+
+    it('adds nothing where init reported no `ruleset.first-commit`', async () => {
+      const g = stubGh(routes());
+      const ctx = context({ gh: g.gh, state: kept(['label.create']) });
+      await run('repo.apply', { firstCommit: true }, ctx);
+      expect(ctx.state.applied).toEqual(['label.create']);
+    });
+  });
+
   it('skips a ruleset that already exists, rather than making a second', async () => {
     const g = stubGh(routes({ [`GET repos/${REPO}/rulesets?per_page=100`]: [[{ id: 7, name: 'Kanon: default branch' }]] }));
     await run('repo.apply', {}, context({ gh: g.gh, state: kept(['ruleset.create']) }));

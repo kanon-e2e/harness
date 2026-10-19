@@ -11,13 +11,22 @@
 // `init`'s read-only token can't see the merge settings, so it names no `merge.settings`; the
 // `provision` job sets them, as the release under test's guard checks them, before the first
 // push (e2e.yml, #36).
+//
+// On a default branch with no commit, `init` names neither ruleset finding but
+// `ruleset.first-commit`: push the first commit, then run `init` again, which creates the ruleset
+// (K-ADOPT-4). A step with `firstCommit`, which follows that push, applies what that run would
+// name: `ruleset.create`, then `ruleset.require-check` (#55). Without it, `ruleset.first-commit`
+// applies nothing, as before.
 
 import { BUCKETS, CHECK_RULE, LANE_CHECK, MERGE_SETTINGS, RULESET_NAME, isLabelTemplate, rulesetBody } from '../lib/adopt.mjs';
+import { bool } from '../lib/args.mjs';
 import { api, repoPath } from '../lib/gh.mjs';
 import { kept } from '../lib/state.mjs';
 
 /** The findings each call applies, in K-ADOPT-1's order. */
 const CALLS = [['merge.settings', 'label.create', 'milestone.buckets', 'ruleset.create'], ['ruleset.require-check']];
+/** What `init`'s run after the first commit names in place of `ruleset.first-commit`. */
+const AFTER_FIRST_COMMIT = ['ruleset.create', 'ruleset.require-check'];
 
 /** @typedef {{ release: string, document: any }} Kept */
 
@@ -61,14 +70,15 @@ export default {
   verb: 'repo.apply',
   kind: 'act',
   waits: false,
-  args: {},
+  args: { firstCommit: bool() },
   uses: () => [['documents', 'init']],
-  /** @param {any} _step @param {any} ctx */
-  async run(_step, ctx) {
+  /** @param {any} step @param {any} ctx */
+  async run(step, ctx) {
     const k = kept(ctx, 'init');
     const call = ctx.state.repoApply ?? 0;
     if (call >= CALLS.length) throw new Error('repo.apply runs at most twice: this is a third call');
     const named = new Set((k.document.findings ?? []).map((/** @type {any} */ f) => f.id));
+    if (step.firstCommit && named.has('ruleset.first-commit')) for (const id of AFTER_FIRST_COMMIT) named.add(id);
     const applying = CALLS[call].filter((id) => named.has(id));
     for (const id of applying) await APPLY[id](ctx, k);
     ctx.state.repoApply = call + 1;
