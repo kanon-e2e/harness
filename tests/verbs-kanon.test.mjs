@@ -146,6 +146,22 @@ describe('register.write', () => {
     expect(register).not.toContain('releaser');
   });
 
+  it('writes the rows at another release, `previous`, `previous-1` or a tag, as kanon.at resolves it', async () => {
+    const root = fakeKanon();
+    const releases = { 'GET repos/yedeya-labs/kanon/releases?per_page=100': [[
+      { tag_name: 'v0.40.2', draft: false, prerelease: false },
+      { tag_name: 'v0.40.1', draft: false, prerelease: false },
+      { tag_name: RELEASE, draft: false, prerelease: true },
+    ]] };
+    for (const [release, tag] of [['previous', 'v0.40.2'], ['previous-1', 'v0.40.1'], ['v0.39.0', 'v0.39.0']]) {
+      const clone = tempDir('clone-');
+      const x = stubExec([resolvesTo(root)]);
+      await run('register.write', { release }, context({ exec: x.exec, gh: stubGh(releases).gh, clone, scenario: { id: 's', apps: ['judge'] } }));
+      expect(x.calls).toEqual([{ cmd: 'npx', args: ['--yes', '--package', `github:yedeya-labs/kanon#${tag}`, '-c', 'readlink -f "$(command -v kanon)"'], cwd: clone }]);
+      expect(readFileSync(join(clone, 'docs/qa/agent-identities.md'), 'utf8')).toContain('| Reviewer | `kanon-e2e-judge` | checks |');
+    }
+  });
+
   it('refuses an App the release doesn\'t know', async () => {
     const root = fakeKanon();
     const ctx = context({ exec: stubExec([resolvesTo(root)]).exec, clone: tempDir(), scenario: { id: 's', apps: ['reporter'] } });

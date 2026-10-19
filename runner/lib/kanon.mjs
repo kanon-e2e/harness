@@ -11,6 +11,8 @@ import { api } from './gh.mjs';
 export const KANON = 'yedeya-labs/kanon';
 /** An exact Kanon release, stable or candidate (Kanon's scripts/move-pins.mjs). */
 export const RELEASE = /^(?:candidate-)?v\d+\.\d+\.\d+$/;
+/** A release a step names: `previous`, `previous-1` or an exact release (`resolveRelease`). */
+export const NAMED_RELEASE = /^(?:previous|previous-1|(?:candidate-)?v\d+\.\d+\.\d+)$/;
 
 /**
  * `npx`'s arguments that fetch Kanon at `release`, as an adopter fetches it.
@@ -47,10 +49,13 @@ export async function runKanon(ctx, release, args) {
 
 /**
  * Keeps a command's document in the run's state, for `expect.init`, `expect.doctor` and `repo.apply`.
+ * A new `init` document starts `repo.apply`'s count again: each gets a settings call and a
+ * `Lane check` call, so an upgrade applies what the new release's `init` names.
  * @param {KanonContext} ctx @param {'init' | 'doctor'} slot @param {{ release: string, exit: number, document: any }} kept
  */
 export const keep = (ctx, slot, kept) => {
   ctx.state.documents = { ...ctx.state.documents, [slot]: kept };
+  if (slot === 'init') delete ctx.state.repoApply;
 };
 
 /** What `kanon init` always runs with: JSON, no questions, no Apps, telemetry and sharing declined (decision 8). */

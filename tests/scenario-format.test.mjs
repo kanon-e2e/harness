@@ -217,6 +217,21 @@ describe('the closed vocabulary, each verb in its kind of segment (§4.2)', () =
     expect(stepErrors({ verb: 'bootstrap.end', move: 'record' }, 'kanon').join('\n')).toMatch(/only in an `act` segment/);
   });
 
+  it('starts repo.apply\'s count again at each new init document, from kanon.init or kanon.at\'s init, and at no other step', () => {
+    const apply = { verb: 'repo.apply' };
+    const upgrade = (again, act) => ({ phases: [{ kanon: [{ verb: 'kanon.at', release: 'previous', command: 'init' }], act: [apply, apply] }, { kanon: [{ verb: 'kanon.doctor', to: true }, ...again], act }] });
+    expect(validateSteps(upgrade([{ verb: 'kanon.init' }], [apply, apply]))).toEqual([]);
+    expect(validateSteps(upgrade([{ verb: 'kanon.at', release: 'v0.40.2', command: 'init' }], [apply, apply]))).toEqual([]);
+    expect(validateSteps(upgrade([{ verb: 'kanon.init' }], [apply, apply, apply])).join('\n')).toMatch(/at most twice/);
+    expect(validateSteps(upgrade([{ verb: 'kanon.at', release: 'v0.40.2', command: 'doctor' }], [apply])).join('\n')).toMatch(/at most twice/);
+    expect(validateSteps(upgrade([], [apply])).join('\n')).toMatch(/at most twice/);
+  });
+
+  it('takes register.write\'s release as kanon.at takes it: previous, previous-1 or an exact release', () => {
+    for (const release of ['previous', 'previous-1', 'v0.40.2', 'candidate-v0.41.0']) expect(stepErrors({ verb: 'register.write', release }, 'kanon')).toEqual([]);
+    for (const release of ['previous-2', 'main', 'v0.40']) expect(stepErrors({ verb: 'register.write', release }, 'kanon').join('\n')).toMatch(/`release`/);
+  });
+
   it('refuses kanon.init flags that would undo what the verb fixes: JSON, no Apps, telemetry and sharing declined', () => {
     for (const flag of ['--telemetry', '--consent=yes', '--upstream-findings=sent', '--create-apps', '--dry-run', '--help']) {
       expect(stepErrors({ verb: 'kanon.init', flags: [flag] }, 'kanon').join('\n')).toMatch(/flag/);

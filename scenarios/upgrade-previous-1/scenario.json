@@ -1,0 +1,9 @@
+{
+  "id": "upgrade-previous-1",
+  "family": "upgrade",
+  "tier": "none",
+  "gate": false,
+  "apps": ["author", "judge"],
+  "claude": "none",
+  "deadlineMinutes": 90
+}
