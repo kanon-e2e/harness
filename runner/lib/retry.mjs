@@ -1,5 +1,6 @@
 // Retries and classification (Kanon plan 0012 §10). A call to GitHub, by `gh` or by `git`, that
-// fails on a 5xx, a rate limit or a network error is retried, up to three times, backing off; a
+// fails on a 5xx, a rate limit, a network error or GitHub's own failure to answer is retried, up
+// to three times, backing off; a
 // false expectation never is: it is the finding. What is left after the retries is `infra`, as is a token that no longer
 // works (401). Anything else that isn't a `Fail` is the harness's own error, and reads `fail`,
 // so a broken runner is never mistaken for a quiet infrastructure day.
@@ -17,10 +18,15 @@ export const RATE_LIMIT_WAIT_MS = 60_000;
 const SERVER = /\bHTTP 5\d\d\b|returned error: 5\d\d\b/;
 const RATE = /rate limit/i;
 const NETWORK = /connection reset|connection refused|i\/o timeout|timed out|TLS handshake|\bEOF\b|no such host|temporary failure in name resolution|network is unreachable|could not resolve host|failed to connect to|couldn't connect to server|RPC failed; curl (?:7|18|28|35|52|55|56|92)\b/i;
+// GitHub failing on its side with no status to show for it (harness #70): `gh`'s Go parser on a
+// body that was cut off, and GitHub's git server failing to write a ref it accepted. A ruleset's
+// refusal names its reason in the parentheses (`push declined due to repository rule
+// violations`, `protected branch hook declined`), never `failure`, so it stays a `fail`.
+const GITHUB = /unexpected end of JSON input|^remote: fatal error in\b|\[remote rejected\][^\n]*\(failure\)/m;
 const EXPIRED = /\bHTTP 401\b|Bad credentials/;
 
 /** Whether a failed call is worth asking again. @param {{ status: number, stderr?: string }} r */
-export const isRetryable = (r) => r.status !== 0 && (SERVER.test(String(r.stderr)) || RATE.test(String(r.stderr)) || NETWORK.test(String(r.stderr)));
+export const isRetryable = (r) => r.status !== 0 && (SERVER.test(String(r.stderr)) || RATE.test(String(r.stderr)) || NETWORK.test(String(r.stderr)) || GITHUB.test(String(r.stderr)));
 
 /**
  * `gh`, retried: each call that fails retryably is asked again up to three times, after 2, 4 and
