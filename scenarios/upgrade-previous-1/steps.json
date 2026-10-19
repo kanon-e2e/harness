@@ -7,6 +7,7 @@
       ],
       "act": [
         { "verb": "files.commit", "from": "kanon", "message": "Install Kanon's full feature at the older release" },
+        { "verb": "bootstrap.end", "move": "record" },
         { "verb": "repo.apply", "firstCommit": true },
         { "verb": "workflow.dispatch", "workflow": "apps-check.yml" },
         { "verb": "run.await", "name": "apps-check", "workflow": "apps-check.yml", "event": "workflow_dispatch", "branch": "main", "deadline": 10 },
@@ -31,13 +32,14 @@
         { "verb": "pr.merge", "pr": "upgrade", "via": "front-door", "deadline": 10 },
         { "verb": "expect.pr", "pr": "upgrade", "state": "merged", "deadline": 2 },
         { "verb": "repo.apply" },
-        { "verb": "repo.apply" }
+        { "verb": "repo.apply" },
+        { "verb": "bootstrap.end", "move": "approval" }
       ]
     },
     {
       "kanon": [
         { "verb": "kanon.doctor" },
-        { "verb": "expect.doctor", "status": "incomplete", "exitCode": 4, "unchecked": ["secrets"], "absent": ["pin.mixed"], "fields": [{ "pointer": "/releases/pins", "equals": ["{{release}}"] }, { "pointer": "/releases/pinned", "equals": "{{release}}" }] }
+        { "verb": "expect.doctor", "status": "incomplete", "exitCode": 4, "unchecked": ["secrets"], "absent": ["pin.mixed", "ruleset.bootstrap-can-end", "ruleset.approval-off"], "fields": [{ "pointer": "/releases/pins", "equals": ["{{release}}"] }, { "pointer": "/releases/pinned", "equals": "{{release}}" }] }
       ],
       "act": []
     }

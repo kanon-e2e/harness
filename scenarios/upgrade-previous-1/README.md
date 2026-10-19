@@ -29,6 +29,7 @@ The scenario leaves out the `--chat=none` that [`install-full`](../install-full/
 | 1 | `kanon` | `kanon.at` with `release: previous-1` and `command: init`, with the flags above: the older release's own `init` | It keeps the `init` document, with `release` the older release. The run's state after this job (the artifact `e2e-state-upgrade-previous-1-kanon-1`) records it. |
 | 1 | `kanon` | `register.write` with `release: previous-1`: the register's rows for `author` and `judge` | |
 | 1 | `act` | `files.commit` from the `kanon` job, to the default branch, in one push | |
+| 1 | `act` | `bootstrap.end` with `record`: under `## Bootstrap` in the adoption record, `ended <today>` in place of the `in bootstrap since` line the older `init` wrote (K-LAYOUT-10), in a second push before the ruleset exists | |
 | 1 | `act` | `repo.apply` with `firstCommit`: the labels and the bucket milestones the older `init` names, and the ruleset it would create on its run after this push (it ran on a default branch with no commit, so it named `ruleset.first-commit`) | |
 | 1 | `act` | `workflow.dispatch` of `apps-check.yml`, then `run.await` for its run | |
 | 1 | `act` | `expect.run` | The run concluded `success`, with `apps / Author` and `apps / Judge` each `success`. |
@@ -45,8 +46,9 @@ The scenario leaves out the `--chat=none` that [`install-full`](../install-full/
 | 2 | `act` | `pr.merge` through the front door | |
 | 2 | `act` | `expect.pr` | The pull request is `merged`. |
 | 2 | `act` | `repo.apply`, twice: what the new `init` document names | The first creates what the new release adds, such as a new label. The second adds the `Lane check` rule if it is still missing. |
+| 2 | `act` | `bootstrap.end` with `approval`: one required approving review in the ruleset, dismissed when a new commit is pushed (K-MERGE-6). It comes only now: once the ruleset requires an approval, the upgrade's pull request would need the Reviewer's, which a scenario with no model can't give. With phase 1's record, it ends bootstrap as Kanon's `docs/install.md` tells an adopter to (K-ADOPT-6). | |
 | 3 | `kanon` | `kanon.doctor` on the default branch | |
-| 3 | `kanon` | `expect.doctor` | Status `incomplete`, exit code 4, and only `secrets` unchecked: the `kanon` job's read-only token can't list the secrets (probe 19). `incomplete` means nothing blocking was found. `/releases/pins` equals `["{{release}}"]` and `/releases/pinned` equals `{{release}}`. The finding `pin.mixed` is absent. |
+| 3 | `kanon` | `expect.doctor` | Status `incomplete`, exit code 4, and only `secrets` unchecked: the `kanon` job's read-only token can't list the secrets (probe 19). `incomplete` means nothing blocking was found. `/releases/pins` equals `["{{release}}"]` and `/releases/pinned` equals `{{release}}`. The findings `pin.mixed`, `ruleset.bootstrap-can-end` and `ruleset.approval-off` are absent. |
 
 `{{release}}` in an expectation is filled in with the release under test before comparing ([`scenarios/README.md`](../README.md#substitutions-in-stepsjson)).
 

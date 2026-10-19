@@ -47,15 +47,17 @@ describe.each(Object.entries(SCENARIOS))('%s', (id, release) => {
 
   it('phase 1, act: the install steps, one push to the default branch before the ruleset, then the settings, apps-check, Lane check on the push and the Lane check rule', () => {
     expect(s.phases[0].act.map((x) => x.verb)).toEqual([
-      'files.commit', 'repo.apply', 'workflow.dispatch', 'run.await', 'expect.run', 'run.await', 'expect.check', 'repo.apply',
+      'files.commit', 'bootstrap.end', 'repo.apply', 'workflow.dispatch', 'run.await', 'expect.run', 'run.await', 'expect.check', 'repo.apply',
     ]);
     expect(s.phases[0].act[0]).toMatchObject({ from: 'kanon' });
     expect(s.phases[0].act[0].branch).toBeUndefined();
-    expect(s.phases[0].act[5]).toMatchObject({ workflow: 'ci.yml', event: 'push', branch: 'main' });
-    expect(s.phases[0].act[6]).toMatchObject({ branch: 'main', name: 'Lane check', conclusion: 'success' });
+    // The adoption record's `ended` line goes to the default branch before the ruleset exists (#59).
+    expect(s.phases[0].act[1]).toEqual({ verb: 'bootstrap.end', move: 'record' });
+    expect(s.phases[0].act[6]).toMatchObject({ workflow: 'ci.yml', event: 'push', branch: 'main' });
+    expect(s.phases[0].act[7]).toMatchObject({ branch: 'main', name: 'Lane check', conclusion: 'success' });
     // The older release's init ran on a default branch with no commit, so it named
     // `ruleset.first-commit`: both calls take it for the ruleset and its Lane check rule (#55).
-    expect([s.phases[0].act[1], s.phases[0].act[7]]).toEqual([
+    expect([s.phases[0].act[2], s.phases[0].act[8]]).toEqual([
       { verb: 'repo.apply', firstCommit: true }, { verb: 'repo.apply', firstCommit: true },
     ]);
   });
@@ -74,7 +76,7 @@ describe.each(Object.entries(SCENARIOS))('%s', (id, release) => {
   });
 
   it('phase 2, act: the upgrade on a branch, through a pull request whose Lane check passed, merged by the front door, then what the new init document names', () => {
-    expect(s.phases[1].act.map((x) => x.verb)).toEqual(['files.commit', 'pr.open', 'run.await', 'expect.check', 'pr.merge', 'expect.pr', 'repo.apply', 'repo.apply']);
+    expect(s.phases[1].act.map((x) => x.verb)).toEqual(['files.commit', 'pr.open', 'run.await', 'expect.check', 'pr.merge', 'expect.pr', 'repo.apply', 'repo.apply', 'bootstrap.end']);
     const [commit, open, ci, check, merge, merged] = s.phases[1].act;
     expect(commit).toMatchObject({ from: 'kanon', branch: open.head });
     expect(open.head).not.toBe('main');
@@ -83,6 +85,13 @@ describe.each(Object.entries(SCENARIOS))('%s', (id, release) => {
     expect(check).toMatchObject({ pr: open.name, name: 'Lane check', conclusion: 'success' });
     expect(merge).toMatchObject({ pr: open.name, via: 'front-door' });
     expect(merged).toMatchObject({ pr: open.name, state: 'merged' });
+  });
+
+  it('ends bootstrap only after the upgrade merges: the approval comes last in phase 2, since no model can approve the upgrade pull request (#59)', () => {
+    const [approval] = s.ofVerb('bootstrap.end').filter((x) => x.move === 'approval');
+    expect(s.phases[1].act.at(-1)).toEqual({ verb: 'bootstrap.end', move: 'approval' });
+    expect(at(approval)).toBeGreaterThan(at(s.ofVerb('pr.merge').at(-1)));
+    expect(s.ofVerb('bootstrap.end').map((x) => x.move)).toEqual(['record', 'approval']);
   });
 
   it('pushes to the default branch only before the ruleset exists; after it, only through the pull request', () => {
@@ -100,7 +109,7 @@ describe.each(Object.entries(SCENARIOS))('%s', (id, release) => {
     expect(s.phases[2].act).toEqual([]);
     const e = s.phases[2].kanon[1];
     expect(e).toMatchObject({ status: 'incomplete', exitCode: 4, unchecked: ['secrets'] });
-    expect(e.absent).toContain('pin.mixed');
+    expect(e.absent).toEqual(['pin.mixed', 'ruleset.bootstrap-can-end', 'ruleset.approval-off']);
     expect(e.findings).toBeUndefined();
     expect(e.fields).toEqual(expect.arrayContaining([
       { pointer: '/releases/pins', equals: ['{{release}}'] },
