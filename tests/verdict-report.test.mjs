@@ -351,15 +351,18 @@ process.stderr.write('no route'); process.exit(1);
     fakeGh(join(dir, 'bin'));
     const issues = env.issues ?? join(dir, 'issues.json');
     if (!env.issues) writeFileSync(issues, '[]');
+    const output = join(dir, 'output');
+    writeFileSync(output, '');
     const planned = env.planned.map((p) => (typeof p === 'string' ? { id: p, gate: false } : p)).map((p) => ({ ...p, apps: [], claude: 'none' }));
     const r = spawnSync(process.execPath, ['runner/verdict.mjs'], {
       env: {
-        ...process.env, PATH: `${join(dir, 'bin')}:${process.env.PATH}`, ISSUES_FILE: issues, START_RESULT: env.start ?? 'success', SCENARIOS: JSON.stringify(planned), RESULTS_DIR: results, OUT: join(dir, 'out'),
+        ...process.env, PATH: `${join(dir, 'bin')}:${process.env.PATH}`, ISSUES_FILE: issues, START_RESULT: env.start ?? 'success', SCENARIOS: JSON.stringify(planned), RESULTS_DIR: results, OUT: join(dir, 'out'), GITHUB_OUTPUT: output,
         TRIGGER: env.trigger ?? 'dispatch', RELEASE: env.release ?? 'v0.40.2', CANDIDATE_SHA: env.sha ?? '', GITHUB_RUN_ID: '39117109753', GITHUB_RUN_ATTEMPT: '1', GITHUB_SERVER_URL: 'https://github.com', GITHUB_REPOSITORY: H,
       },
       encoding: 'utf8',
     });
-    return { status: r.status, verdict: JSON.parse(readFileSync(join(dir, 'out', 'verdict.json'), 'utf8')), issues };
+    const outputs = Object.fromEntries(readFileSync(output, 'utf8').split('\n').filter(Boolean).map((l) => [l.slice(0, l.indexOf('=')), l.slice(l.indexOf('=') + 1)]));
+    return { status: r.status, verdict: JSON.parse(readFileSync(join(dir, 'out', 'verdict.json'), 'utf8')), issues, outputs };
   };
 
   it('reads a result in either layout `download-artifact` leaves: one match, in `results` itself; several, one directory each', () => {
@@ -396,6 +399,13 @@ process.stderr.write('no route'); process.exit(1);
     expect(cli({ planned: ['a'], results: [result('a', 'pass')] })).toMatchObject({ status: 0, verdict: { schema: 'kanon-e2e-verdict/v1', verdict: 'pass' } });
   });
 
+  it('hands `report` the verdict and the red issue as its step outputs, which `report` reads in place of an artifact (#24)', () => {
+    expect(cli({ planned: ['a'], results: [result('a', 'pass')] }).outputs).toEqual({ verdict: 'pass', 'red-issue': '' });
+    const red = cli({ trigger: 'candidate', release: RELEASE, sha: SHA, planned: gating('a'), results: [result('a', 'fail')] });
+    expect(red.outputs).toEqual({ verdict: 'fail', 'red-issue': red.verdict.redIssue });
+    expect(red.verdict.redIssue).toMatch(/\/issues\/\d+$/);
+  });
+
   it('exits non-zero on fail and on infra-only, after writing verdict.json', () => {
     expect(cli({ planned: ['a'], results: [result('a', 'fail')] })).toMatchObject({ status: 1, verdict: { verdict: 'fail' } });
     expect(cli({ planned: ['a'], results: [result('a', 'infra')] })).toMatchObject({ status: 1, verdict: { verdict: 'infra-only' } });
@@ -415,18 +425,18 @@ process.stderr.write('no route'); process.exit(1);
   });
 });
 
-describe('report: the check run\'s conclusion and summary from verdict.json', () => {
-  const report = readWorkflows()['e2e.yml'].jobs.report;
+describe('report: the check run\'s conclusion and summary from `verdict`\'s outputs', () => {
+  const e2e = readWorkflows()['e2e.yml'];
+  const report = e2e.jobs.report;
   const read = report.steps.find((s) => s.id === 'verdict');
   const complete = report.steps.find((s) => s.name === 'Complete the check run');
 
-  /** Runs the read step's script on what `Download verdict.json` left (or didn't). */
-  const conclude = (verdict) => {
+  /** Runs the read step's script on what `verdict`'s outputs carried: empty when it didn't run. */
+  const conclude = ({ verdict = '', redIssue = '' } = {}) => {
     const dir = tempDir('report-');
-    if (verdict !== undefined) writeTree(dir, { 'verdict/verdict.json': typeof verdict === 'string' ? verdict : JSON.stringify(verdict) });
     const output = join(dir, 'output');
     writeFileSync(output, '');
-    execFileSync('bash', ['-e', '-c', read.run], { env: { PATH: process.env.PATH, RUNNER_TEMP: dir, GITHUB_OUTPUT: output }, stdio: 'ignore' });
+    execFileSync('bash', ['-e', '-c', read.run], { env: { PATH: process.env.PATH, GITHUB_OUTPUT: output, VERDICT: verdict, ISSUE: redIssue }, stdio: 'ignore' });
     return Object.fromEntries(readFileSync(output, 'utf8').trim().split('\n').map((l) => [l.slice(0, l.indexOf('=')), l.slice(l.indexOf('=') + 1)]));
   };
 
@@ -461,15 +471,27 @@ if (n <= Number(process.env.FAILURES)) { process.stderr.write('HTTP 502'); proce
     expect(conclude({ verdict: 'infra-only' }).conclusion).toBe('neutral');
   });
 
-  it('neutral when there is no verdict.json (verdict didn\'t run, or the download failed), or one that can\'t be read', () => {
-    expect(conclude(undefined)).toEqual({ conclusion: 'neutral', verdict: 'none', issue: '' });
-    expect(conclude('not json').conclusion).toBe('neutral');
+  it('neutral when `verdict` gave no verdict (it didn\'t run, or stopped before its output), or one that isn\'t a verdict', () => {
+    expect(conclude()).toEqual({ conclusion: 'neutral', verdict: 'none', issue: '' });
     expect(conclude({ verdict: 'PASS' }).conclusion).toBe('neutral');
+    expect(conclude({ verdict: 'pass\nconclusion=success' })).toEqual({ conclusion: 'neutral', verdict: 'unreadable', issue: '' });
+  });
+
+  it('reads the verdict from the `verdict` job\'s outputs, never from an artifact: a `kanon` job\'s code may upload one under any name, but can\'t set another job\'s outputs (#24)', () => {
+    expect(report.steps.filter((s) => s.uses?.startsWith('actions/download-artifact@'))).toEqual([]);
+    expect(read.env).toEqual({ VERDICT: '${{ needs.verdict.outputs.verdict }}', ISSUE: '${{ needs.verdict.outputs.red-issue }}' });
+    const give = e2e.jobs.verdict.steps.find((s) => s.run === 'node runner/verdict.mjs');
+    expect(e2e.jobs.verdict.outputs).toEqual({ verdict: `\${{ steps.${give.id}.outputs.verdict }}`, 'red-issue': `\${{ steps.${give.id}.outputs.red-issue }}` });
+  });
+
+  it('`verdict.json` stays an artifact for people to read, and its upload replaces one planted under its name (#24)', () => {
+    const upload = e2e.jobs.verdict.steps.find((s) => s.name === 'Upload verdict.json');
+    expect(upload.with).toMatchObject({ name: 'verdict', overwrite: true });
   });
 
   it('takes the red issue only as an issue of this repository\'s', () => {
     expect(conclude({ verdict: 'fail', redIssue: `https://github.com/${H}/issues/41` }).issue).toBe(`https://github.com/${H}/issues/41`);
-    for (const forged of [`https://github.com/${H}/issues/41 [x](https://evil)`, 'https://evil.example/issues/1', `https://github.com/${H}/pull/3`, 7, null]) {
+    for (const forged of [`https://github.com/${H}/issues/41 [x](https://evil)`, 'https://evil.example/issues/1', `https://github.com/${H}/pull/3`, `https://github.com/${H}/issues/41\nconclusion=success`]) {
       expect(conclude({ verdict: 'fail', redIssue: forged }).issue, String(forged)).toBe('');
     }
   });
@@ -490,7 +512,6 @@ if (n <= Number(process.env.FAILURES)) { process.stderr.write('HTTP 502'); proce
   it('never leaves the check run `in_progress`: `report` runs whatever `verdict` did, no step of it is skipped, and a 5xx is retried', () => {
     expect(report.if).toBe("${{ always() && needs.start.result == 'success' }}");
     expect(report.steps.filter((s) => s.if !== undefined)).toEqual([]);
-    expect(report.steps.find((s) => s.name === 'Download verdict.json')['continue-on-error']).toBe(true);
     const retried = post({ CONCLUSION: 'failure', VERDICT: 'fail', ISSUE: '' }, 2);
     expect(retried.status).toBe(0);
     expect(retried.calls).toHaveLength(3);

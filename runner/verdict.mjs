@@ -27,7 +27,8 @@
 //
 //   node runner/verdict.mjs   (reads TRIGGER, RELEASE, CANDIDATE_SHA, START_RESULT, SCENARIOS,
 //                              RESULTS_DIR, GH_TOKEN, GITHUB_RUN_ID, GITHUB_RUN_ATTEMPT; writes
-//                              OUT/verdict.json and the step summary)
+//                              OUT/verdict.json, the step's `verdict` and `red-issue` outputs,
+//                              and the step summary)
 
 import { appendFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -298,6 +299,9 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const out = env.OUT ?? 'verdict';
   mkdirSync(out, { recursive: true });
   writeFileSync(join(out, 'verdict.json'), `${JSON.stringify(v, null, 2)}\n`);
+  // `report` reads these, the job's outputs, never verdict.json: code in a `kanon` job can upload
+  // an artifact under any name in the run, but can't set another job's outputs (#24).
+  if (env.GITHUB_OUTPUT) appendFileSync(env.GITHUB_OUTPUT, `verdict=${v.verdict}\nred-issue=${v.redIssue ?? ''}\n`);
   if (env.GITHUB_STEP_SUMMARY) {
     appendFileSync(env.GITHUB_STEP_SUMMARY, [
       `## Verdict: **${v.verdict}**`,

@@ -476,7 +476,9 @@ jobs:
   # Reads each scenario's result, and exits non-zero unless the scenarios that count passed: on a
   # candidate's run those with `gate: true`, elsewhere every planned one. On a candidate's run it
   # files, edits or closes the candidate's red issue and the `the Reporter can't post` issue, with
-  # the workflow's own token (`issues: write`), and holds no key (runner/verdict.mjs, E8).
+  # the workflow's own token (`issues: write`), and holds no key (runner/verdict.mjs, E8). It hands
+  # `report` the verdict as its outputs: a `kanon` job's code can upload an artifact under any name
+  # in the run, `verdict` among them, but can't set another job's outputs (#24).
   verdict:
     name: verdict
     needs: [plan, start, provision, model-key, kanon-1, act-1, gate-2, kanon-2, act-2, gate-3, kanon-3, act-3]
@@ -486,6 +488,9 @@ jobs:
     permissions:
       contents: read
       issues: write
+    outputs:
+      verdict: ${{ steps.give.outputs.verdict }}
+      red-issue: ${{ steps.give.outputs.red-issue }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -500,6 +505,7 @@ jobs:
           pattern: kanon-e2e-result-*
           path: ${{ runner.temp }}/results
       - name: Give the verdict
+        id: give
         env:
           GH_TOKEN: ${{ github.token }}
           TRIGGER: ${{ needs.plan.outputs.trigger }}
@@ -510,6 +516,7 @@ jobs:
           RESULTS_DIR: ${{ runner.temp }}/results
           OUT: ${{ runner.temp }}/verdict
         run: node runner/verdict.mjs
+      # For people to read; `report` doesn't. `overwrite`: one planted under its name is replaced.
       - name: Upload verdict.json
         if: ${{ always() }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -518,6 +525,7 @@ jobs:
           path: ${{ runner.temp }}/verdict/verdict.json
           if-no-files-found: ignore
           retention-days: 90
+          overwrite: true
 
   # Completes the check run `start` created, whatever happened between: pass is success, fail is
   # failure, and anything else (infra-only, no verdict, one that can't be read) is neutral, which
@@ -531,22 +539,15 @@ jobs:
     environment: e2e-report
     permissions: {}
     steps:
-      - name: Download verdict.json
-        continue-on-error: true
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          name: verdict
-          path: ${{ runner.temp }}/verdict
+      # From `verdict`'s outputs, never its artifact (#24). Empty when `verdict` didn't run.
       - name: Read the verdict
         id: verdict
+        env:
+          VERDICT: ${{ needs.verdict.outputs.verdict }}
+          ISSUE: ${{ needs.verdict.outputs.red-issue }}
         run: |
-          file="$RUNNER_TEMP/verdict/verdict.json"
-          verdict=none
-          issue=
-          if [ -f "$file" ]; then
-            verdict=$(jq -r 'if type == "object" and (.verdict | type) == "string" then .verdict else "unreadable" end' "$file" 2>/dev/null || echo unreadable)
-            issue=$(jq -r 'if type == "object" and (.redIssue | type) == "string" then .redIssue else "" end' "$file" 2>/dev/null || true)
-          fi
+          verdict=${VERDICT:-none}
+          issue=$ISSUE
           # Whole-string matches: a value with a newline in it is refused, so it can't add an output.
           if ! [[ $verdict =~ ^[a-z-]{1,20}$ ]]; then verdict=unreadable; fi
           if ! [[ $issue =~ ^https://github\.com/kanon-e2e/harness/issues/[0-9]{1,10}$ ]]; then issue=; fi
