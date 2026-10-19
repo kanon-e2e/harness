@@ -33,7 +33,8 @@ export const maxParallel = (s = SETTINGS) => {
 export const waves = (n, p) => Math.ceil(n / p);
 
 /**
- * Each stage's longest time, in minutes: a `provision` job, and each pair's mint plus its job.
+ * Each stage's longest time, in minutes: a `provision` job, each pair's mint plus its job, and
+ * the gate before phases 2 and 3 (#62), one job, not a matrix.
  * @param {typeof SETTINGS} s
  */
 export const stageMinutes = (s = SETTINGS) => ({
@@ -41,6 +42,7 @@ export const stageMinutes = (s = SETTINGS) => ({
   modelKey: s.minutes.mint + s.minutes.modelKey,
   kanon: s.minutes.mint + s.minutes.kanon,
   act: s.minutes.mint + s.minutes.act,
+  gate: s.minutes.gate,
 });
 
 /**
@@ -55,7 +57,7 @@ export const longestRunningMinutes = (n, s = SETTINGS) => {
   const m = stageMinutes(s);
   const w = waves(n, p);
   const wm = waves(Math.min(n, s.maxModelScenarios), p);
-  return w * m.provision + wm * m.modelKey + PHASES * w * (m.kanon + m.act);
+  return w * m.provision + wm * m.modelKey + PHASES * w * (m.kanon + m.act) + (PHASES - 1) * m.gate;
 };
 
 /** The repositories one run of `n` scenarios creates: each, and its `infra` re-run. @param {number} n */

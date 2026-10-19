@@ -13,9 +13,10 @@
 #
 # THE JOBS (§5.2): plan → start (a candidate's run: the Reporter's check run, in_progress) →
 # provision (each scenario's repository, its Apps' secrets, its topics) → model-key (a
-# `claude: subscription` scenario's token) → kanon-1, act-1, kanon-2, act-2, kanon-3, act-3 (each
-# a pair: a `mint` job that holds the driver's key and a job handed only the token) → verdict →
-# report (the check run's conclusion). docs/jobs.md says which job holds which secret, and why.
+# `claude: subscription` scenario's token) → kanon-1, act-1, gate-2, kanon-2, act-2, gate-3,
+# kanon-3, act-3 (each scenario job a pair: a `mint` job that holds the driver's key and a job
+# handed only the token; each gate, the scenarios its phase runs) → verdict → report (the check
+# run's conclusion). docs/jobs.md says which job holds which secret, and why.
 name: e2e
 
 on:
@@ -314,17 +315,52 @@ jobs:
       DRIVER_APP_ID: ${{ secrets.DRIVER_APP_ID }}
       DRIVER_APP_KEY: ${{ secrets.DRIVER_APP_KEY }}
 
-  kanon-2:
-    name: kanon-2 (${{ matrix.scenario.id }})
+  # THE SCENARIOS PHASE 2 RUNS (#62): those `plan` planned that have a phase 2 and that no earlier
+  # phase ended. An ended scenario's repository was deleted or archived by the `act` job that
+  # ended it, and a scenario with fewer phases has nothing to run, so neither gets a phase-2 job,
+  # and no mint is scoped to a repository that may be gone (runner/gate.mjs). Holds no key.
+  gate-2:
+    name: gate-2 (the scenarios phase 2 runs)
     needs: [plan, start, act-1]
     if: ${{ !cancelled() && needs.start.result != 'failure' && needs.plan.outputs.go == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      scenarios: ${{ steps.gate.outputs.scenarios }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      - name: Download the results of the scenarios that ended
+        continue-on-error: true
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: kanon-e2e-result-*
+          path: ${{ runner.temp }}/results
+      - name: Decide the scenarios phase 2 runs
+        id: gate
+        env:
+          PHASE: 2
+          SCENARIOS: ${{ needs.plan.outputs.scenarios }}
+          RESULTS_DIR: ${{ runner.temp }}/results
+        run: node runner/gate.mjs
+
+  kanon-2:
+    name: kanon-2 (${{ matrix.scenario.id }})
+    needs: [plan, start, gate-2]
+    if: ${{ !cancelled() && needs.start.result != 'failure' && needs.plan.outputs.go == 'true' && needs.gate-2.result == 'success' && needs.gate-2.outputs.scenarios != '[]' }}
     permissions:
       contents: read
     strategy:
       fail-fast: false
       max-parallel: 2 # maxParallel() in runner/sizing.mjs, from runner/settings.json
       matrix:
-        scenario: ${{ fromJSON(needs.plan.outputs.scenarios) }}
+        scenario: ${{ fromJSON(needs.gate-2.outputs.scenarios) }}
     uses: ./.github/workflows/e2e-kanon-run.yml
     with:
       scenario: ${{ matrix.scenario.id }}
@@ -338,15 +374,15 @@ jobs:
 
   act-2:
     name: act-2 (${{ matrix.scenario.id }})
-    needs: [plan, start, kanon-2]
-    if: ${{ !cancelled() && needs.start.result != 'failure' && needs.plan.outputs.go == 'true' }}
+    needs: [plan, start, gate-2, kanon-2]
+    if: ${{ !cancelled() && needs.start.result != 'failure' && needs.plan.outputs.go == 'true' && needs.gate-2.result == 'success' && needs.gate-2.outputs.scenarios != '[]' }}
     permissions:
       contents: read
     strategy:
       fail-fast: false
       max-parallel: 2 # maxParallel() in runner/sizing.mjs, from runner/settings.json
       matrix:
-        scenario: ${{ fromJSON(needs.plan.outputs.scenarios) }}
+        scenario: ${{ fromJSON(needs.gate-2.outputs.scenarios) }}
     uses: ./.github/workflows/e2e-act-run.yml
     with:
       scenario: ${{ matrix.scenario.id }}
@@ -358,17 +394,52 @@ jobs:
       DRIVER_APP_ID: ${{ secrets.DRIVER_APP_ID }}
       DRIVER_APP_KEY: ${{ secrets.DRIVER_APP_KEY }}
 
-  kanon-3:
-    name: kanon-3 (${{ matrix.scenario.id }})
+  # THE SCENARIOS PHASE 3 RUNS (#62): those `plan` planned that have a phase 3 and that no earlier
+  # phase ended. An ended scenario's repository was deleted or archived by the `act` job that
+  # ended it, and a scenario with fewer phases has nothing to run, so neither gets a phase-3 job,
+  # and no mint is scoped to a repository that may be gone (runner/gate.mjs). Holds no key.
+  gate-3:
+    name: gate-3 (the scenarios phase 3 runs)
     needs: [plan, start, act-2]
     if: ${{ !cancelled() && needs.start.result != 'failure' && needs.plan.outputs.go == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      scenarios: ${{ steps.gate.outputs.scenarios }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      - name: Download the results of the scenarios that ended
+        continue-on-error: true
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: kanon-e2e-result-*
+          path: ${{ runner.temp }}/results
+      - name: Decide the scenarios phase 3 runs
+        id: gate
+        env:
+          PHASE: 3
+          SCENARIOS: ${{ needs.plan.outputs.scenarios }}
+          RESULTS_DIR: ${{ runner.temp }}/results
+        run: node runner/gate.mjs
+
+  kanon-3:
+    name: kanon-3 (${{ matrix.scenario.id }})
+    needs: [plan, start, gate-3]
+    if: ${{ !cancelled() && needs.start.result != 'failure' && needs.plan.outputs.go == 'true' && needs.gate-3.result == 'success' && needs.gate-3.outputs.scenarios != '[]' }}
     permissions:
       contents: read
     strategy:
       fail-fast: false
       max-parallel: 2 # maxParallel() in runner/sizing.mjs, from runner/settings.json
       matrix:
-        scenario: ${{ fromJSON(needs.plan.outputs.scenarios) }}
+        scenario: ${{ fromJSON(needs.gate-3.outputs.scenarios) }}
     uses: ./.github/workflows/e2e-kanon-run.yml
     with:
       scenario: ${{ matrix.scenario.id }}
@@ -382,15 +453,15 @@ jobs:
 
   act-3:
     name: act-3 (${{ matrix.scenario.id }})
-    needs: [plan, start, kanon-3]
-    if: ${{ !cancelled() && needs.start.result != 'failure' && needs.plan.outputs.go == 'true' }}
+    needs: [plan, start, gate-3, kanon-3]
+    if: ${{ !cancelled() && needs.start.result != 'failure' && needs.plan.outputs.go == 'true' && needs.gate-3.result == 'success' && needs.gate-3.outputs.scenarios != '[]' }}
     permissions:
       contents: read
     strategy:
       fail-fast: false
       max-parallel: 2 # maxParallel() in runner/sizing.mjs, from runner/settings.json
       matrix:
-        scenario: ${{ fromJSON(needs.plan.outputs.scenarios) }}
+        scenario: ${{ fromJSON(needs.gate-3.outputs.scenarios) }}
     uses: ./.github/workflows/e2e-act-run.yml
     with:
       scenario: ${{ matrix.scenario.id }}
@@ -408,7 +479,7 @@ jobs:
   # the workflow's own token (`issues: write`), and holds no key (runner/verdict.mjs, E8).
   verdict:
     name: verdict
-    needs: [plan, start, provision, model-key, kanon-1, act-1, kanon-2, act-2, kanon-3, act-3]
+    needs: [plan, start, provision, model-key, kanon-1, act-1, gate-2, kanon-2, act-2, gate-3, kanon-3, act-3]
     if: ${{ !cancelled() && needs.plan.outputs.go == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10

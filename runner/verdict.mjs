@@ -273,7 +273,7 @@ const readResult = (path) => {
  * `act` job uploads `kanon-e2e-result-<scenario>` holding only that file, both from its own input.
  * @param {string} dir
  */
-const readResults = (dir) => {
+export const readResults = (dir) => {
   if (existsSync(join(dir, 'result.json'))) return [readResult(join(dir, 'result.json'))].filter(Boolean);
   let names = [];
   try {

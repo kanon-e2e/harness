@@ -14,7 +14,11 @@ const e2e = docs['e2e.yml'];
 const PAIRS = ['kanon', 'act', 'model-key', 'janitor'];
 const TOKEN_ACTION = /^actions\/create-github-app-token@[0-9a-f]{40}$/;
 const SCENARIO_JOBS = ['kanon-1', 'act-1', 'kanon-2', 'act-2', 'kanon-3', 'act-3'];
+const GATES = ['gate-2', 'gate-3'];
 const RUNS_IF = "${{ !cancelled() && needs.start.result != 'failure' && needs.plan.outputs.go == 'true' }}";
+/** Phase 2's and 3's scenario jobs run only the scenarios their gate kept, and only when it kept one (#62). */
+const GATED_IF = (gate) => `\${{ !cancelled() && needs.start.result != 'failure' && needs.plan.outputs.go == 'true' && needs.${gate}.result == 'success' && needs.${gate}.outputs.scenarios != '[]' }}`;
+const gateOf = (name) => (Number(name.split('-')[1]) > 1 ? `gate-${name.split('-')[1]}` : null);
 const only = (o) => Object.values(o.jobs)[0];
 const mintOf = (pair) => docs[`e2e-${pair}-run.yml`].jobs.mint.steps.find((s) => TOKEN_ACTION.test(s.uses ?? ''));
 const permissionsOf = (step) => Object.fromEntries(Object.entries(step.with).filter(([k]) => k.startsWith('permission-')).map(([k, v]) => [k.slice('permission-'.length), v]));
@@ -46,8 +50,8 @@ describe('e2e.yml: its triggers, never a pull request (§7)', () => {
 });
 
 describe('e2e.yml: the jobs of §5.2, in order', () => {
-  it('holds exactly plan, start, provision, model-key, the six scenario jobs, verdict and report', () => {
-    expect(Object.keys(e2e.jobs)).toEqual(['plan', 'start', 'provision', 'model-key', ...SCENARIO_JOBS, 'verdict', 'report']);
+  it('holds exactly plan, start, provision, model-key, the six scenario jobs with a gate before phases 2 and 3, verdict and report', () => {
+    expect(Object.keys(e2e.jobs)).toEqual(['plan', 'start', 'provision', 'model-key', 'kanon-1', 'act-1', 'gate-2', 'kanon-2', 'act-2', 'gate-3', 'kanon-3', 'act-3', 'verdict', 'report']);
   });
 
   it('`plan` reads with the workflow\'s own token only, and records its marker before any repository is created', () => {
@@ -68,11 +72,17 @@ describe('e2e.yml: the jobs of §5.2, in order', () => {
     expect(e2e.jobs.provision.if).toBe(RUNS_IF);
     for (const name of ['provision', 'model-key']) expect(e2e.jobs[name].needs, name).toEqual(expect.arrayContaining(['plan', 'start']));
     expect(e2e.jobs['model-key'].if).toBe("${{ !cancelled() && needs.start.result != 'failure' && needs.plan.outputs.go == 'true' && needs.plan.outputs.model-scenarios != '[]' }}");
-    const before = { 'kanon-1': 'model-key', 'act-1': 'kanon-1', 'kanon-2': 'act-1', 'act-2': 'kanon-2', 'kanon-3': 'act-2', 'act-3': 'kanon-3' };
+    const before = { 'kanon-1': 'model-key', 'act-1': 'kanon-1', 'gate-2': 'act-1', 'kanon-2': 'gate-2', 'act-2': 'kanon-2', 'gate-3': 'act-2', 'kanon-3': 'gate-3', 'act-3': 'kanon-3' };
+    for (const name of GATES) {
+      expect(e2e.jobs[name].if, name).toBe(RUNS_IF);
+      expect(e2e.jobs[name].needs, name).toEqual(expect.arrayContaining(['plan', 'start', before[name]]));
+    }
     for (const name of SCENARIO_JOBS) {
       const job = e2e.jobs[name];
-      expect(job.if, name).toBe(RUNS_IF);
-      expect(job.needs, name).toEqual(expect.arrayContaining(['plan', 'start', before[name]]));
+      const gate = gateOf(name);
+      expect(job.if, name).toBe(gate ? GATED_IF(gate) : RUNS_IF);
+      expect(job.needs, name).toEqual(expect.arrayContaining(['plan', 'start', before[name], ...(gate ? [gate] : [])]));
+      expect(job.strategy.matrix.scenario, name).toBe(gate ? `\${{ fromJSON(needs.${gate}.outputs.scenarios) }}` : '${{ fromJSON(needs.plan.outputs.scenarios) }}');
       const [kind, phase] = name.split('-');
       expect(job.uses, name).toBe(`./.github/workflows/e2e-${kind}-run.yml`);
       expect(job.with.phase, name).toBe(Number(phase));
@@ -81,8 +91,30 @@ describe('e2e.yml: the jobs of §5.2, in order', () => {
     }
   });
 
+  it('a phase-N job neither mints nor runs for a scenario with fewer than N phases, or one an earlier phase ended (#62)', () => {
+    for (const gate of GATES) {
+      const job = e2e.jobs[gate];
+      const phase = gate.split('-')[1];
+      expect(job.environment, gate).toBeUndefined();
+      expect(job.permissions, gate).toEqual({ contents: 'read' });
+      expect(JSON.stringify(job), gate).not.toMatch(/secrets\./);
+      expect(job['timeout-minutes'], gate).toBe(SETTINGS.minutes.gate);
+      expect(job.outputs.scenarios, gate).toBe('${{ steps.gate.outputs.scenarios }}');
+      const download = job.steps.find((s) => String(s.uses).startsWith('actions/download-artifact@'));
+      expect(download, gate).toMatchObject({ 'continue-on-error': true, with: { pattern: 'kanon-e2e-result-*', path: '${{ runner.temp }}/results' } });
+      const decide = job.steps.find((s) => s.id === 'gate');
+      expect(decide.run, gate).toBe('node runner/gate.mjs');
+      expect(decide.env, gate).toMatchObject({ PHASE: Number(phase), SCENARIOS: '${{ needs.plan.outputs.scenarios }}', RESULTS_DIR: download.with.path });
+      // Both of the phase's jobs, and so both of its mints, take their scenarios from the gate.
+      for (const name of [`kanon-${phase}`, `act-${phase}`]) {
+        expect(e2e.jobs[name].strategy.matrix.scenario, name).toBe(`\${{ fromJSON(needs.${gate}.outputs.scenarios) }}`);
+        expect(e2e.jobs[name].if, name).toBe(GATED_IF(gate));
+      }
+    }
+  });
+
   it('`verdict` waits for every scenario job and runs unless cancelled; `report` runs whenever `start` posted a check run', () => {
-    expect(e2e.jobs.verdict.needs).toEqual(expect.arrayContaining(['plan', 'start', 'provision', 'model-key', ...SCENARIO_JOBS]));
+    expect(e2e.jobs.verdict.needs).toEqual(expect.arrayContaining(['plan', 'start', 'provision', 'model-key', ...SCENARIO_JOBS, ...GATES]));
     expect(e2e.jobs.verdict.if).toBe("${{ !cancelled() && needs.plan.outputs.go == 'true' }}");
     expect(e2e.jobs.report.needs).toEqual(['plan', 'start', 'verdict']);
     expect(e2e.jobs.report.if).toBe("${{ always() && needs.start.result == 'success' }}");
