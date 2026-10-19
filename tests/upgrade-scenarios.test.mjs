@@ -53,6 +53,15 @@ describe.each(Object.entries(SCENARIOS))('%s', (id, release) => {
     expect(s.phases[0].act[0].branch).toBeUndefined();
     expect(s.phases[0].act[5]).toMatchObject({ workflow: 'ci.yml', event: 'push', branch: 'main' });
     expect(s.phases[0].act[6]).toMatchObject({ branch: 'main', name: 'Lane check', conclusion: 'success' });
+    // The older release's init ran on a default branch with no commit, so it named
+    // `ruleset.first-commit`: both calls take it for the ruleset and its Lane check rule (#55).
+    expect([s.phases[0].act[1], s.phases[0].act[7]]).toEqual([
+      { verb: 'repo.apply', firstCommit: true }, { verb: 'repo.apply', firstCommit: true },
+    ]);
+  });
+
+  it('phase 2, act: repo.apply after the upgrade takes the new init document as it is, with no firstCommit', () => {
+    for (const a of s.phases[1].act.filter((x) => x.verb === 'repo.apply')) expect(a.firstCommit).toBeUndefined();
   });
 
   it('phase 2, kanon: doctor --to, kept and held to /releases/to equal to {{release}}, then pins.move, then init at the release under test with the same flags', () => {

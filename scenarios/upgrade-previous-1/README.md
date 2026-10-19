@@ -29,12 +29,12 @@ The scenario leaves out the `--chat=none` that [`install-full`](../install-full/
 | 1 | `kanon` | `kanon.at` with `release: previous-1` and `command: init`, with the flags above: the older release's own `init` | It keeps the `init` document, with `release` the older release. The run's state after this job (the artifact `e2e-state-upgrade-previous-1-kanon-1`) records it. |
 | 1 | `kanon` | `register.write` with `release: previous-1`: the register's rows for `author` and `judge` | |
 | 1 | `act` | `files.commit` from the `kanon` job, to the default branch, in one push | |
-| 1 | `act` | `repo.apply`: the labels, the bucket milestones and the ruleset that the older `init` names | |
+| 1 | `act` | `repo.apply` with `firstCommit`: the labels and the bucket milestones the older `init` names, and the ruleset it would create on its run after this push (it ran on a default branch with no commit, so it named `ruleset.first-commit`) | |
 | 1 | `act` | `workflow.dispatch` of `apps-check.yml`, then `run.await` for its run | |
 | 1 | `act` | `expect.run` | The run concluded `success`, with `apps / Author` and `apps / Judge` each `success`. |
 | 1 | `act` | `run.await` for `ci.yml`'s run on the push | |
 | 1 | `act` | `expect.check` | `Lane check` on the default branch's head concluded `success`, at the older release. |
-| 1 | `act` | `repo.apply` again: the ruleset's required `Lane check` rule | |
+| 1 | `act` | `repo.apply` again, with `firstCommit`: the ruleset's required `Lane check` rule | |
 | 2 | `kanon` | `kanon.doctor` with `to: true`: doctor at the release under test, `--to` it, on the older install | |
 | 2 | `kanon` | `expect.doctor` | `/releases/to` equals `{{release}}`: the document lists what the release under test needs. Only `secrets` is unchecked. It holds no status: the install is still at the older release. |
 | 2 | `kanon` | `pins.move`: Kanon's own `scripts/move-pins.mjs`, at the release under test, moves every pin to it | |
