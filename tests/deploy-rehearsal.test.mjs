@@ -37,7 +37,7 @@ describe('the deploy rehearsal is a valid scenario of the deploy family', () => 
   });
 
   it('scenario.json: family deploy, no model, no Claude, the Releaser, and no gate yet', () => {
-    expect(scenario).toMatchObject({ id: 'deploy-rehearsal', family: 'deploy', tier: 'none', claude: 'none', gate: false });
+    expect(scenario).toMatchObject({ id: 'deploy-rehearsal', family: 'deploy', tier: 'none', claude: 'none', gate: true });
     expect(scenario.apps).toContain('releaser');
     // The review lane init installs reads the Reviewer's slug from the App register (K-LAYOUT-6).
     expect(scenario.apps).toContain('judge');

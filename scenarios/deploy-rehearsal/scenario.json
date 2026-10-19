@@ -2,7 +2,7 @@
   "id": "deploy-rehearsal",
   "family": "deploy",
   "tier": "none",
-  "gate": false,
+  "gate": true,
   "apps": ["judge", "releaser"],
   "claude": "none",
   "deadlineMinutes": 100
