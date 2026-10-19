@@ -77,7 +77,7 @@ gh workflow run e2e.yml -R kanon-e2e/harness -f release=v0.40.2 -f select=deploy
 - **`install-review`** ([`install-review/`](scenarios/install-review/README.md), `gate: false`). The **Review** feature, from an empty tree, with the Judge.
 - **`install-build`** ([`install-build/`](scenarios/install-build/README.md), `gate: true`). The **Review + build** feature, from an empty tree, with the Author and the Judge.
 - **`install-full`** ([`install-full/`](scenarios/install-full/README.md), `gate: true`). The **Full pipeline**, from an empty tree, with the Author and the Judge. Its scheduled lanes can fire while the repository lives.
-- **`install-python`** ([`install-python/`](scenarios/install-python/README.md), `gate: false`). The **Review + build** feature into Kanon's Python fixture project (`pyproject.toml`, `src/`, `tests/` and its `project-setup` hook, taken at `candidate-v0.41.0`), with the Author and the Judge.
+- **`install-python`** ([`install-python/`](scenarios/install-python/README.md), `gate: true`). The **Review + build** feature into Kanon's Python fixture project (`pyproject.toml`, `src/`, `tests/` and its `project-setup` hook, taken at `candidate-v0.41.0`), with the Author and the Judge.
 
 Dispatch the family:
 
