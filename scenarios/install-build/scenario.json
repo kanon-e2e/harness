@@ -2,7 +2,7 @@
   "id": "install-build",
   "family": "install",
   "tier": "none",
-  "gate": false,
+  "gate": true,
   "apps": ["author", "judge"],
   "claude": "none",
   "deadlineMinutes": 60

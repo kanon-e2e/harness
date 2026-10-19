@@ -32,6 +32,9 @@ const load = (id) => {
 /** Every file under a directory, by relative path. */
 const files = (dir, here = dir) => readdirSync(here).flatMap((n) => (statSync(join(here, n)).isDirectory() ? files(dir, join(here, n)) : [relative(dir, join(here, n))])).sort();
 
+/** The scenarios that burnt in and gate (#43): each turned `gate: true` in its own pull request. */
+const GATED = new Set(['install-build']);
+
 describe.each(Object.entries(SCENARIOS))('%s', (id, { feature, apps }) => {
   const s = load(id);
   const at = (step) => s.steps.indexOf(step);
@@ -40,8 +43,8 @@ describe.each(Object.entries(SCENARIOS))('%s', (id, { feature, apps }) => {
     expect(validateScenarioDir(s.dir)).toEqual([]);
   });
 
-  it(`scenario.json: family install, no model, no Claude, no gate until burn-in, and ${feature}'s Apps in requirements.json`, () => {
-    expect(s.scenario).toMatchObject({ id, family: 'install', tier: 'none', claude: 'none', gate: false });
+  it(`scenario.json: family install, no model, no Claude, gate only once burnt in, and ${feature}'s Apps in requirements.json`, () => {
+    expect(s.scenario).toMatchObject({ id, family: 'install', tier: 'none', claude: 'none', gate: GATED.has(id) });
     expect(s.scenario.apps).toEqual(apps);
   });
 
