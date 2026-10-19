@@ -256,9 +256,23 @@ describe('pr.label', () => {
 
 describe('pr.merge', () => {
   const pulls = (...answers) => ({ [`GET repos/${REPO}/pulls/5`]: inTurn(...answers) });
+  // The pull request's merge-queue state, as GraphQL answers it: whether a queue sets its base's
+  // strategy, whether it is in the queue, and the queue's last removal of it.
+  const queueState = ({ enabled = false, queued = false, removals = [] } = {}) => ({
+    data: { repository: { pullRequest: {
+      id: 'PR_node5', headRefOid: 'abc1234', isMergeQueueEnabled: enabled, isInMergeQueue: queued,
+      timelineItems: { nodes: removals.map(([createdAt, reason]) => ({ createdAt, reason })) },
+    } } },
+  });
+  /** The GraphQL route: the read answers in turn, and the enqueue answers once. */
+  const graphql = (...reads) => {
+    const read = inTurn(...reads);
+    return { 'POST graphql': (call) => (/enqueuePullRequest/.test(call.body.query) ? { data: { enqueuePullRequest: { mergeQueueEntry: { position: 1 } } } } : read()) };
+  };
+  const enqueues = (g) => g.calls.filter((c) => c.key === 'POST graphql' && /enqueuePullRequest/.test(c.body.query));
 
   it('through the front door: squash with auto-merge, then polls until merged', async () => {
-    const g = stubGh({ [`pr merge 5 -R ${REPO} --squash --auto`]: undefined, ...pulls({ state: 'open', merged: false }, { state: 'closed', merged: true }) });
+    const g = stubGh({ ...graphql(queueState()), [`pr merge 5 -R ${REPO} --squash --auto`]: undefined, ...pulls({ state: 'open', merged: false }, { state: 'closed', merged: true }) });
     const ctx = context({ gh: g.gh, state: { prs: { docs: 5 } } });
     await run('pr.merge', { pr: 'docs', via: 'front-door', deadline: 5 }, ctx);
     expect(ctx.clock.sleeps).toEqual([2000]);
@@ -266,6 +280,7 @@ describe('pr.merge', () => {
 
   it('merges at once where the pull request is already clean', async () => {
     const g = stubGh({
+      ...graphql(queueState()),
       [`pr merge 5 -R ${REPO} --squash --auto`]: fail('Pull request is in clean status'),
       [`pr merge 5 -R ${REPO} --squash`]: undefined,
       ...pulls({ state: 'closed', merged: true }),
@@ -276,16 +291,18 @@ describe('pr.merge', () => {
 
   it('merges at once where the repository doesn\'t allow auto-merge, as `kanon init` leaves a fresh one', async () => {
     const g = stubGh({
+      ...graphql(queueState()),
       [`pr merge 5 -R ${REPO} --squash --auto`]: fail('GraphQL: Auto merge is not allowed for this repository (enablePullRequestAutoMerge)'),
       [`pr merge 5 -R ${REPO} --squash`]: undefined,
       ...pulls({ state: 'closed', merged: true }),
     });
     await run('pr.merge', { pr: 'docs', via: 'front-door', deadline: 5 }, context({ gh: g.gh, state: { prs: { docs: 5 } } }));
-    expect(g.calls.map((c) => c.key)).toEqual([`pr merge 5 -R ${REPO} --squash --auto`, `pr merge 5 -R ${REPO} --squash`, `GET repos/${REPO}/pulls/5`]);
+    expect(g.calls.map((c) => c.key)).toEqual(['POST graphql', `pr merge 5 -R ${REPO} --squash --auto`, `pr merge 5 -R ${REPO} --squash`, `GET repos/${REPO}/pulls/5`]);
   });
 
   it('fails with GitHub\'s answer when the merge without auto-merge is refused too', async () => {
     const g = stubGh({
+      ...graphql(queueState()),
       [`pr merge 5 -R ${REPO} --squash --auto`]: fail('GraphQL: Auto merge is not allowed for this repository (enablePullRequestAutoMerge)'),
       [`pr merge 5 -R ${REPO} --squash`]: fail('Required status check "Lane check" is expected.'),
     });
@@ -299,10 +316,58 @@ describe('pr.merge', () => {
   });
 
   it('fails when the pull request closes unmerged, or the deadline passes', async () => {
-    const closed = stubGh({ [`pr merge 5 -R ${REPO} --squash --auto`]: undefined, ...pulls({ state: 'closed', merged: false }) });
+    const closed = stubGh({ ...graphql(queueState()), [`pr merge 5 -R ${REPO} --squash --auto`]: undefined, ...pulls({ state: 'closed', merged: false }) });
     await expect(run('pr.merge', { pr: 'docs', via: 'front-door', deadline: 5 }, context({ gh: closed.gh, state: { prs: { docs: 5 } } }))).rejects.toMatchObject({ name: 'Fail', message: expect.stringMatching(/closed without merging/) });
-    const open = stubGh({ [`pr merge 5 -R ${REPO} --squash --auto`]: undefined, ...pulls({ state: 'open', merged: false }) });
+    const open = stubGh({ ...graphql(queueState()), [`pr merge 5 -R ${REPO} --squash --auto`]: undefined, ...pulls({ state: 'open', merged: false }) });
     await expect(run('pr.merge', { pr: 'docs', via: 'front-door', deadline: 1 }, context({ gh: open.gh, state: { prs: { docs: 5 } } }))).rejects.toMatchObject({ name: 'Fail', message: expect.stringMatching(/deadline/) });
+  });
+
+  // Where a merge queue sets the strategy, GitHub refuses `--squash`, and `--auto` too where the
+  // repository doesn't allow auto-merge (#73). No `pr merge` is routed below, so a queued
+  // repository sent down that path fails by name.
+  it('through the front door where a merge queue sets the strategy: enqueues the head, then polls until merged', async () => {
+    const g = stubGh({
+      ...graphql(
+        // The queue turned an earlier head away before this merge asked: that removal isn't this one's.
+        queueState({ enabled: true, removals: [['2026-10-18T10:00:00Z', 'merge_conflict']] }),
+      ),
+      ...pulls({ state: 'open', merged: false }, { state: 'closed', merged: true }),
+    });
+    const ctx = context({ gh: g.gh, state: { prs: { docs: 5 } } });
+    await run('pr.merge', { pr: 'docs', via: 'front-door', deadline: 5 }, ctx);
+    expect(enqueues(g).map((c) => c.body.variables)).toEqual([{ id: 'PR_node5', head: 'abc1234' }]);
+    expect(g.calls.some((c) => c.key.startsWith('pr merge'))).toBe(false);
+  });
+
+  it('follows a pull request already in the merge queue, without enqueuing it again', async () => {
+    const g = stubGh({ ...graphql(queueState({ enabled: true, queued: true })), ...pulls({ state: 'closed', merged: true }) });
+    await run('pr.merge', { pr: 'docs', via: 'front-door', deadline: 5 }, context({ gh: g.gh, state: { prs: { docs: 5 } } }));
+    expect(enqueues(g)).toEqual([]);
+    expect(g.calls.some((c) => c.key.startsWith('pr merge'))).toBe(false);
+  });
+
+  it('fails with the queue\'s reason, before the deadline, when the queue removes the pull request unmerged', async () => {
+    const g = stubGh({
+      ...graphql(
+        queueState({ enabled: true }),
+        queueState({ enabled: true, queued: true }),
+        queueState({ enabled: true, removals: [['2026-10-19T10:00:00Z', 'merge_conflict']] }),
+      ),
+      ...pulls({ state: 'open', merged: false }),
+    });
+    const ctx = context({ gh: g.gh, state: { prs: { docs: 5 } } });
+    await expect(run('pr.merge', { pr: 'docs', via: 'front-door', deadline: 60 }, ctx)).rejects.toMatchObject({ name: 'Fail', message: expect.stringMatching(/merge queue removed pull request #5 without merging it \(merge_conflict\)/) });
+    expect(ctx.clock.sleeps).toEqual([2000]);
+  });
+
+  it('keeps polling when the queue\'s removal is its merge, which GitHub records as `merged`', async () => {
+    const g = stubGh({
+      ...graphql(queueState({ enabled: true }), queueState({ enabled: true, removals: [['2026-10-19T10:00:00Z', 'merged']] })),
+      ...pulls({ state: 'open', merged: false }, { state: 'closed', merged: true }),
+    });
+    const ctx = context({ gh: g.gh, state: { prs: { docs: 5 } } });
+    await run('pr.merge', { pr: 'docs', via: 'front-door', deadline: 5 }, ctx);
+    expect(ctx.clock.sleeps).toEqual([2000]);
   });
 });
 
@@ -336,6 +401,7 @@ describe('release.cut', () => {
   it('merges the release pull request, then waits for the Release the test Releaser publishes', async () => {
     const g = stubGh({
       [`GET repos/${REPO}/pulls?state=open&per_page=100`]: inTurn([[]], [[{ number: 3, labels: [{ name: 'feature' }] }, { number: 12, labels: [{ name: 'autorelease: pending' }] }]]),
+      'POST graphql': { data: { repository: { pullRequest: { id: 'PR_node12', headRefOid: 'abc1234', isMergeQueueEnabled: false, isInMergeQueue: false, timelineItems: { nodes: [] } } } } },
       [`pr merge 12 -R ${REPO} --squash --auto`]: undefined,
       [`GET repos/${REPO}/pulls/12`]: { state: 'closed', merged: true, merged_at: '2026-10-17T10:00:00Z' },
       [`GET repos/${REPO}/releases?per_page=20`]: inTurn([], [

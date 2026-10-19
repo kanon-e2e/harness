@@ -28,8 +28,8 @@ export default {
       return found ? met(found) : unmet(`no open pull request is labelled "${PENDING}" yet`);
     }, end);
     remember(ctx, 'prs', 'release', pr.number);
-    await startMerge(ctx, pr.number, 'front-door');
-    const merged = await poll(ctx, step.deadline, mergedProbe(ctx, pr.number), end);
+    const started = await startMerge(ctx, pr.number, 'front-door');
+    const merged = await poll(ctx, step.deadline, mergedProbe(ctx, pr.number, started), end);
     const release = await poll(ctx, step.deadline, async () => {
       const releases = await api(ctx, repoPath(ctx, 'releases?per_page=20'));
       // `published_at`, not `created_at`: GitHub dates a Release's creation by its tagged commit,

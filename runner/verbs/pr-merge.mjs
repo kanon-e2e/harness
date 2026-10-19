@@ -18,7 +18,7 @@ export default {
   /** @param {any} step @param {any} ctx */
   async run(step, ctx) {
     const n = named(ctx, 'prs', step.pr);
-    await startMerge(ctx, n, step.via);
-    await poll(ctx, step.deadline, mergedProbe(ctx, n));
+    const started = await startMerge(ctx, n, step.via);
+    await poll(ctx, step.deadline, mergedProbe(ctx, n, started));
   },
 };
