@@ -29,6 +29,7 @@ import expectDoctor from './verbs/expect-doctor.mjs';
 import expectInit from './verbs/expect-init.mjs';
 import expectIssue from './verbs/expect-issue.mjs';
 import expectPr from './verbs/expect-pr.mjs';
+import expectRow from './verbs/expect-row.mjs';
 import expectRun from './verbs/expect-run.mjs';
 import filesCommit from './verbs/files-commit.mjs';
 import issueAwait from './verbs/issue-await.mjs';
@@ -52,7 +53,7 @@ const ALL = [
   kanonInit, repoApply, kanonDoctor, kanonAt, registerWrite, pinsMove, filesCommit,
   prOpen, prLabel, prMerge, issueOpen, issueLabel, workflowDispatch, releaseCut,
   deploymentAwaitApproval, runAwait, expectInit, expectDoctor, expectRun, expectCheck,
-  expectIssue, expectPr, expectArtifact, expectApi,
+  expectIssue, expectPr, expectArtifact, expectApi, expectRow,
   environmentCreate, rulesetTags, issueAwait, bootstrapEnd,
 ];
 

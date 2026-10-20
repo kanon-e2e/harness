@@ -13,10 +13,10 @@
 #
 # THE JOBS (§5.2): plan → start (a candidate's run: the Reporter's check run, in_progress) →
 # provision (each scenario's repository, its Apps' secrets, its topics) → model-key (a
-# `claude: subscription` scenario's token) → kanon-1, act-1, gate-2, kanon-2, act-2, gate-3,
-# kanon-3, act-3 (each scenario job a pair: a `mint` job that holds the driver's key and a job
-# handed only the token; each gate, the scenarios its phase runs) → verdict → report (the check
-# run's conclusion). docs/jobs.md says which job holds which secret, and why.
+# `claude: subscription` scenario's token, once the real-model ledger admitted it) → kanon-1,
+# act-1, gate-2, kanon-2, act-2, gate-3, kanon-3, act-3 (each scenario job a pair: a `mint` job
+# that holds the driver's key and a job handed only the token; each gate, the scenarios its phase
+# runs) → verdict → report (the check run's conclusion). docs/jobs.md says which job holds which secret, and why.
 name: e2e
 
 on:
@@ -58,6 +58,8 @@ jobs:
       candidate-sha: ${{ steps.plan.outputs.candidate-sha }}
       scenarios: ${{ steps.plan.outputs.scenarios }}
       model-scenarios: ${{ steps.plan.outputs.model-scenarios }}
+      # The real-model scenarios the ledger refused for their cost (runner/ledger.mjs), for verdict.
+      skipped: ${{ steps.plan.outputs.skipped }}
       marker: ${{ steps.plan.outputs.marker }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -513,6 +515,7 @@ jobs:
           CANDIDATE_SHA: ${{ needs.plan.outputs.candidate-sha }}
           START_RESULT: ${{ needs.start.result }}
           SCENARIOS: ${{ needs.plan.outputs.scenarios }}
+          SKIPPED: ${{ needs.plan.outputs.skipped }}
           RESULTS_DIR: ${{ runner.temp }}/results
           OUT: ${{ runner.temp }}/verdict
         run: node runner/verdict.mjs

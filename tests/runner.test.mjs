@@ -413,4 +413,13 @@ describe('the result, `kanon-e2e-result/v1` (§5.1 step 8)', () => {
     expect(result.run).toEqual(RUN);
     expect(result.trigger).toBe('nightly');
   });
+
+  it('carries the real-model cost `expect.row` kept, `costUsd`, for the ledger (E10); none when no row was read', async () => {
+    const kept = await segment({ state: kanonState({ costUsd: 0.42 }), routes: { [VARS]: { total_count: 1 } } });
+    expect(kept.result).toMatchObject({ result: 'pass', costUsd: 0.42 });
+    const failed = await segment({ state: kanonState({ costUsd: 31.5 }), routes: { [VARS]: { total_count: 0 } } });
+    expect(failed.result).toMatchObject({ result: 'fail', costUsd: 31.5 });
+    const none = await segment({ state: kanonState(), routes: { [VARS]: { total_count: 1 } } });
+    expect(none.result).not.toHaveProperty('costUsd');
+  });
 });

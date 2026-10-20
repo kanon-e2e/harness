@@ -113,6 +113,13 @@ describe('e2e.yml: the jobs of §5.2, in order', () => {
     }
   });
 
+  it('the real-model ledger gates `model-key` (E10): only the scenarios `plan` admitted get the model token; those it refused for their cost reach `verdict` as `skipped`', () => {
+    expect(e2e.jobs.plan.outputs).toMatchObject({ 'model-scenarios': '${{ steps.plan.outputs.model-scenarios }}', skipped: '${{ steps.plan.outputs.skipped }}' });
+    expect(e2e.jobs['model-key'].strategy.matrix.scenario).toBe('${{ fromJSON(needs.plan.outputs.model-scenarios) }}');
+    const give = e2e.jobs.verdict.steps.find((s) => s.id === 'give');
+    expect(give.env).toMatchObject({ SCENARIOS: '${{ needs.plan.outputs.scenarios }}', SKIPPED: '${{ needs.plan.outputs.skipped }}' });
+  });
+
   it('`verdict` waits for every scenario job and runs unless cancelled; `report` runs whenever `start` posted a check run', () => {
     expect(e2e.jobs.verdict.needs).toEqual(expect.arrayContaining(['plan', 'start', 'provision', 'model-key', ...SCENARIO_JOBS, ...GATES]));
     expect(e2e.jobs.verdict.if).toBe("${{ !cancelled() && needs.plan.outputs.go == 'true' }}");

@@ -4,6 +4,8 @@ Kanon's plan 0012 §4 makes a scenario data: a directory here, `scenarios/<scena
 
 **The Merger's refusal has no scenario.** Plan 0012 §6.1 lists a third gate refusal, the Merger refusing a pull request with no verdict. The Merger acts only on an event whose actor is a member or a registered agent App (Kanon's `scripts/lane-gate.mjs`, `K-AGENT-45`), and every event the harness can make in a scenario repository is the driver App's: a dispatch, a review, a push, or a schedule set by its push. The driver is in no scenario's register, so the Merger's gate refuses each of them before it reads any verdict, and "no merge" would pass for the wrong reason. A scenario for it needs an actor the Merger admits that isn't a model: the Judge acting outside a lane, or a merge queue's schedule, which no verb makes.
 
+**The real-model tier has no scenario yet, for the same reason.** Plan 0012 §6.2's first, `review-real`, has the Reviewer review a pull request labelled `review:please`. The review lane's gate admits that label only from a member or a registered agent App, and the driver is neither, as [`refuse-review-label/`](refuse-review-label/README.md) holds. The ledger (`runner/ledger.mjs`) and the verb that records a model run's cost, `expect.row`, are in place for it ([`docs/jobs.md`](../docs/jobs.md#the-real-model-ledger)).
+
 ## The rules every verb keeps
 
 - **A closed set.** A step names one of the verbs below, and only the arguments that verb takes. A scenario that needs another verb adds it in a pull request, with its unit test. `runner/` is the Owner's to merge ([`docs/qa/escalation-paths.md`](../docs/qa/escalation-paths.md)).
@@ -50,6 +52,7 @@ A step is an object: `verb`, then the verb's arguments. A step's `name` is the n
 | `expect.issue` | Holds an issue to its `state`, `labels`, `labelsAbsent`, `author` (an App's slug), and a known `marker` in a post, optionally `markerBy` an App. | `either` | yes |
 | `expect.pr` | Holds a pull request as `expect.issue` holds an issue, with `merged` as a state, and looks for the marker in its reviews too. | `either` | yes |
 | `expect.artifact` | Holds a kept run to an artifact of a `name`. | `either` | yes |
+| `expect.row` | Holds a kept run's telemetry row, the artifact `kanon-telemetry-<lane>-<run id>-<attempt>` a model lane uploads whether or not the repository sends telemetry (Kanon's `actions/agent-telemetry`), read as JSON data: a version-2 run row of the `lane`, whose `total_cost_usd` is at most `ceilingUsd`, the lane's own `--max-budget-usd`. An `outcome` of `unavailable`, the model never reached, reads `infra` (plan 0012 §6.2). It keeps the cost in the run's state, before comparing, and the result carries it as `costUsd`: the real-model ledger's history (`runner/ledger.mjs`, E10). | `either` | yes |
 | `expect.api` | Makes one GET of the scenario repository's own API per try, a `path` under `repos/{{repository}}/`, and holds the value at a `pointer` to what it `equals`. The validator refuses any other path. | `either` | yes |
 
 ## Substitutions in steps.json

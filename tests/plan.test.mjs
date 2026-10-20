@@ -1,7 +1,8 @@
+import { writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { decide, fitCap } from '../runner/plan.mjs';
-import { maxScenarios } from '../runner/sizing.mjs';
-import { SETTINGS } from '../runner/sizing.mjs';
+import { maxScenarios, SETTINGS } from '../runner/sizing.mjs';
 import { fail, stubGh } from './helpers/stubs.mjs';
 
 /**
@@ -31,8 +32,16 @@ const check = (status, conclusion = null, completedMinutesAgo = 0, slug = SETTIN
 });
 const artifacts = (name, runs) => [{ total_count: runs.length, artifacts: runs.map((id) => ({ name, workflow_run: { id }, expired: false, created_at: ago(60) })) }];
 
+/**
+ * A real-model scenario's past results on `main`, newest first: each a run id and the `costUsd`
+ * its result records. `plan`'s ledger reads them (E10).
+ */
+const results = (id, costs) => [{ total_count: costs.length, artifacts: costs.map((_, i) => ({ name: `kanon-e2e-result-${id}`, workflow_run: { id: 500 + i, head_branch: 'main' }, expired: false, created_at: ago(60 * (i + 1)) })) }];
+
 /** The world `plan` reads, for a candidate `candidate-v0.42.0` on top of stable `v0.41.0`. */
-const world = ({ checks = [], candidateRuns = [], inFlight = [], nightlyRecord = null, main = MAIN, rels = releases('candidate-v0.42.0', 'v0.41.0') } = {}) => ({
+const world = ({ checks = [], candidateRuns = [], inFlight = [], nightlyRecord = null, main = MAIN, rels = releases('candidate-v0.42.0', 'v0.41.0'), history = [] } = {}) => ({
+  [`GET ${H}/actions/artifacts?name=kanon-e2e-result-review-real&per_page=100`]: results('review-real', history),
+  [DOWNLOADS]: Object.fromEntries(history.map((cost, i) => [500 + i, { schema: 'kanon-e2e-result/v1', scenario: 'review-real', result: 'pass', costUsd: cost }])),
   [`GET ${K}/releases?per_page=100`]: rels,
   [`GET ${K}/commits/candidate-v0.42.0`]: { sha: SHA },
   [`GET ${K}/commits/v0.41.0`]: { sha: 'b'.repeat(40) },
@@ -44,9 +53,21 @@ const world = ({ checks = [], candidateRuns = [], inFlight = [], nightlyRecord =
   [`GET ${H}/actions/artifacts?name=e2e-nightly-${main}&per_page=100`]: nightlyRecord ? [{ total_count: 1, artifacts: [{ name: `e2e-nightly-${main}`, workflow_run: { id: 5 }, created_at: nightlyRecord, expired: false }] }] : [{ total_count: 0, artifacts: [] }],
 });
 
-const plan = async (input, routes) => {
+const DOWNLOADS = Symbol('downloads');
+/**
+ * `gh`, stubbed: `run download <run> … -n <name> -D <dir>` writes the result the world holds for
+ * that run into `dir`, as `gh` would; every other call goes to the routes.
+ */
+const plan = async (input, { [DOWNLOADS]: downloads = {}, ...routes }) => {
   const g = stubGh(routes);
-  const out = await decide({ catalogue: CATALOGUE, runId: '999', release: '', select: '', schedule: '', ...input }, { gh: g.gh, now: () => NOW });
+  const gh = async (args, body) => {
+    if (args[0] !== 'run' || args[1] !== 'download') return g.gh(args, body);
+    const r = downloads[args[2]];
+    if (!r) return { status: 1, stdout: '', stderr: 'no artifact' };
+    writeFileSync(join(args[args.indexOf('-D') + 1], 'result.json'), JSON.stringify(r));
+    return { status: 0, stdout: '', stderr: '' };
+  };
+  const out = await decide({ catalogue: CATALOGUE, runId: '999', release: '', select: '', schedule: '', ...input }, { gh, now: () => NOW });
   return { ...out, g };
 };
 const poll = (routes) => plan({ event: 'schedule', schedule: POLL }, routes);
@@ -280,5 +301,57 @@ describe('the cap holds what a run plans, gating scenarios first (the Owner, 202
     expect(out.go).toBe(true);
     expect(out.scenarios.length).toBeLessThanOrEqual(CAP);
     for (const g of catalogue.filter((s) => s.gate === true)) expect(ids(out)).toContain(g.id);
+  });
+});
+
+describe('the real-model ledger in `plan` (§6.2, E10)', () => {
+  const ids = (out) => out.scenarios.map((s) => s.id);
+
+  it('the poll starts a real-model scenario whose expected cost fits the $2, and hands it to `model-key`', async () => {
+    const out = await poll(world({ history: [0.8, 1.0, 0.6] }));
+    expect(ids(out)).toEqual(['deploy-rehearsal', 'install-review', 'review-real']);
+    expect(out.modelScenarios).toEqual([{ id: 'review-real', apps: ['author', 'judge'], claude: 'subscription', gate: false }]);
+    expect(out.skipped).toEqual([]);
+    expect(out.ledger).toEqual([{ id: 'review-real', started: true, reason: expect.stringMatching(/expected \$1\.50/) }]);
+  });
+
+  it('the nightly refuses one whose expected cost would pass the $2: `skipped: budget`, with no repository and no model token', async () => {
+    const out = await nightly(world({ history: [1.4] }));
+    expect(out.go).toBe(true);
+    expect(ids(out)).toEqual(['deploy-rehearsal', 'install-review']);
+    expect(out.modelScenarios).toEqual([]);
+    expect(out.skipped).toEqual([{ id: 'review-real', gate: false, skipped: 'budget' }]);
+    expect(out.ledger[0]).toMatchObject({ id: 'review-real', started: false, reason: expect.stringMatching(/^skipped: budget.*\$2\.10/) });
+  });
+
+  it('the poll and the nightly never start a scenario with no recorded cost, and say why; nothing reads it as `skipped`', async () => {
+    for (const run of [poll, nightly]) {
+      const out = await run(world());
+      expect(out.go).toBe(true);
+      expect(ids(out)).not.toContain('review-real');
+      expect(out.modelScenarios).toEqual([]);
+      expect(out.skipped).toEqual([]);
+      expect(out.ledger).toEqual([{ id: 'review-real', started: false, reason: expect.stringMatching(/no recorded cost.*dispatch/) }]);
+    }
+  });
+
+  it('the Owner\'s dispatch starts a scenario with no recorded cost, alone', async () => {
+    const out = await dispatch('candidate-v0.42.0', world(), 'review-real');
+    expect(out).toMatchObject({ go: true, trigger: 'dispatch' });
+    expect(ids(out)).toEqual(['review-real']);
+    expect(out.ledger).toEqual([{ id: 'review-real', started: true, reason: expect.stringMatching(/first run, dispatched alone/) }]);
+  });
+
+  it('a dispatch whose only scenario the ledger refuses stops at `plan`: no repository, no run', async () => {
+    const out = await dispatch('candidate-v0.42.0', world({ history: [3] }), 'review-real');
+    expect(out).toMatchObject({ go: false, scenarios: [], modelScenarios: [], marker: '' });
+    expect(out.reason).toMatch(/refused by the real-model ledger: review-real \(skipped: budget/);
+  });
+
+  it('reads the history only for a run that goes ahead, and only for the real-model scenarios', async () => {
+    const held = await nightly(world({ nightlyRecord: ago(60) }));
+    expect(held.g.calls.some((c) => /kanon-e2e-result-/.test(c.key))).toBe(false);
+    const ran = await poll(world({ history: [0.5] }));
+    expect(ran.g.calls.filter((c) => /kanon-e2e-result-/.test(c.key)).map((c) => c.key)).toEqual([`GET ${H}/actions/artifacts?name=kanon-e2e-result-review-real&per_page=100`]);
   });
 });

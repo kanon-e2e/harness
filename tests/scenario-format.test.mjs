@@ -411,6 +411,7 @@ const EVERY_VERB = {
         { verb: 'expect.run', run: 'ci', conclusion: 'success', jobs: [{ name: 'Lane check', conclusion: 'success' }], deadline: 2 },
         { verb: 'expect.check', pr: 'docs', name: 'Lane check', conclusion: 'success', deadline: 5 },
         { verb: 'expect.artifact', run: 'ci', name: 'agent-run-row', deadline: 2 },
+        { verb: 'expect.row', run: 'ci', lane: 'review', ceilingUsd: 30, deadline: 2 },
         { verb: 'pr.merge', pr: 'docs', via: 'front-door', deadline: 20 },
         { verb: 'expect.pr', pr: 'docs', state: 'merged', labels: ['review:please'], labelsAbsent: ['needs:human'], author: 'kanon-e2e-author', marker: 'role:reviewer', markerBy: 'kanon-e2e-judge', deadline: 5 },
         { verb: 'issue.open', name: 'bug', title: 'A bug', labels: ['bug'] },
