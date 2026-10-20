@@ -1,6 +1,6 @@
 # The jobs, the secrets and the sizing
 
-What `e2e.yml` runs, which job holds which secret, how big a run may be, and what Kanon's release gate reads of a run ([Kanon plan 0012](https://github.com/yedeya-labs/kanon/blob/main/docs/plans/0012-end-to-end-tests.md) §5.2, §5.3, §8.2; harness #16, #40). `tests/e2e-workflows.test.mjs` and `tests/workflows.test.mjs` hold the workflows to this page, `tests/sizing.test.mjs` the numbers, and `tests/verdict-report.test.mjs` the verdict, its issues and the check run.
+What `e2e.yml` and the weekly upgrade signal (`upgrade-signal.yml`) run, which job holds which secret, how big a run may be, and what Kanon's release gate reads of a run ([Kanon plan 0012](https://github.com/yedeya-labs/kanon/blob/main/docs/plans/0012-end-to-end-tests.md) §5.2, §5.3, §8.2; harness #16, #40). `tests/e2e-workflows.test.mjs` and `tests/workflows.test.mjs` hold the workflows to this page, `tests/sizing.test.mjs` the numbers, `tests/verdict-report.test.mjs` the verdict, its issues and the check run, and `tests/upgrade-signal.test.mjs` the upgrade signal's workflow.
 
 ## The jobs
 

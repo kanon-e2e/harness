@@ -49,7 +49,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          pins=$(grep -rhoE 'uses:[[:space:]]*yedeya-labs/kanon/[^@[:space:]]+@[^[:space:]#]+' .github | sed 's/.*@//' | sort -u)
+          # The pattern is built in two pieces, so this line never reads as a Kanon reference to
+          # lane-check, and the grep never matches itself.
+          kanon='yedeya-labs/kanon'
+          pins=$(grep -rhoE "uses:[[:space:]]*${kanon}/[^@[:space:]]+@[^[:space:]#]+" .github | sed 's/.*@//' | sort -u)
           if [ "$(printf '%s\n' "$pins" | grep -c .)" -ne 1 ] || ! printf '%s' "$pins" | grep -Eq '^(candidate-)?v[0-9]+\.[0-9]+\.[0-9]+$'; then
             echo "::error title=upgrade-signal::the harness doesn't pin Kanon to one exact release: $(printf '%s' "$pins" | tr '\n' ' ')"
             exit 1
