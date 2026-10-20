@@ -465,22 +465,12 @@ describe('deployment.await-approval', () => {
       .rejects.toMatchObject({ name: 'Fail', message: expect.stringMatching(/production \/ deploy/) });
   });
 
-  it('a candidate\'s run: files the Owner\'s approval request in the harness, and waits for the decision', async () => {
-    const g = stubGh({
-      ...waiting,
-      [JOBS]: job('waiting'),
-      'POST repos/kanon-e2e/harness/issues': { number: 3 },
-      [`GET repos/${REPO}/actions/runs/77/approvals`]: inTurn([], [{ state: 'approved', environments: [{ name: 'production' }] }]),
-      'PATCH repos/kanon-e2e/harness/issues/3': {},
-    });
+  it('a candidate\'s run: cancels as a nightly does, and asks no person anything (decision 9, amended 2026-10-20)', async () => {
+    const g = stubGh({ ...waiting, [JOBS]: inTurn(job('waiting'), job('completed', 'cancelled')), [`POST repos/${REPO}/actions/runs/77/cancel`]: {} });
     const ctx = context({ gh: g.gh, trigger: 'candidate' });
     await run('deployment.await-approval', { environment: 'production', deadline: 30 }, ctx);
-    const filed = g.writes()[0];
-    expect(filed.key).toBe('POST repos/kanon-e2e/harness/issues');
-    expect(filed.body.body).toContain(`https://github.com/${REPO}/actions/runs/77`);
-    expect(filed.body.body).toContain(RELEASE);
-    expect(g.writes().at(-1)).toMatchObject({ key: 'PATCH repos/kanon-e2e/harness/issues/3', body: { state: 'closed' } });
-    expect(ctx.state.approvals).toEqual({ production: { run: 77, decision: 'approved', jobs: ['production / deploy'] } });
+    expect(g.writes().map((c) => c.key)).toEqual([`POST repos/${REPO}/actions/runs/77/cancel`]);
+    expect(ctx.state.approvals.production.decision).toBe('cancelled');
   });
 
   it('fails when no job waits on the environment by the deadline', async () => {

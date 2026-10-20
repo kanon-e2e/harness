@@ -36,7 +36,7 @@ A step is an object: `verb`, then the verb's arguments. A step's `name` is the n
 | `issue.label` | Adds the labels in `add` to an issue. | `act` | no |
 | `workflow.dispatch` | Dispatches a `workflow`, with its `inputs`, on `ref` or the default branch. | `act` | no |
 | `release.cut` | Merges the release pull request (labelled `autorelease: pending`), keeps it as `release`, and waits for the Release the test Releaser publishes. | `act` | yes |
-| `deployment.await-approval` | Waits until a run's job is `waiting` on the `environment`. On a nightly or dispatched run it cancels the run, and holds that job to ending `cancelled`. On a candidate's run it files the Owner's approval request in the harness, and waits for the Owner's decision (decision 9). | `act` | yes |
+| `deployment.await-approval` | Waits until a run's job is `waiting` on the `environment`. Then it cancels the run, and holds that job to ending `cancelled`, on every trigger: no person is asked anything (decision 9, amended 2026-10-20). | `act` | yes |
 | `environment.create` | Creates the deployment environment `name` as plan 0010 §4 and §12 ask: its deployment refs the `tags` pattern alone, no administrator bypass, and with `reviewer: true` the Owner (`environmentReviewer` in `runner/settings.json`) as its required reviewer, with self-review prevented. `kanon init` creates no environment. | `act` | no |
 | `ruleset.tags` | Creates the active tag ruleset `Release tags` on the `pattern`, with the creation, update and deletion rules doctor's `deploy.tag-ruleset` reads, letting the test Apps in `bypass` through. | `act` | no |
 | `run.await` | Waits for a `workflow`'s run on an `event` and a commit (a `branch`'s head or a `pr`'s) to complete, and keeps it. | `either` | yes |

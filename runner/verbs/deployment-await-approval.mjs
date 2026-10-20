@@ -1,8 +1,8 @@
-// `deployment.await-approval` (Kanon plan 0012 §4.2, decision 9): waits until a run's job for
-// the environment is `waiting`. Then, on a nightly run or a dispatch, it cancels the run and
-// waits for that job to end, which must be `cancelled`; on a candidate's run, it files the
-// Owner's approval request in the harness repository and waits for the Owner's decision. It keeps
-// the run, the decision and the waiting jobs' names. One deadline covers every wait.
+// `deployment.await-approval` (Kanon plan 0012 §4.2, decision 9 as amended on 2026-10-20): waits
+// until a run's job for the environment is `waiting`, cancels the run, and waits for that job to
+// end, which must be `cancelled`. Every trigger does the same, a candidate's run included: no
+// person is asked anything. It keeps the run, the decision and the waiting jobs' names. One
+// deadline covers every wait.
 
 import { WORKFLOW, str } from '../lib/args.mjs';
 import { Fail } from '../lib/fail.mjs';
@@ -33,35 +33,14 @@ export default {
       }
       return unmet(`no run's job waits on the environment ${step.environment} yet`);
     }, end);
-    const names = waiting.map((/** @type {any} */ j) => j.name);
-    const record = (/** @type {string} */ decision) => {
-      ctx.state.approvals = { ...ctx.state.approvals, [step.environment]: { run: runId, decision, jobs: names } };
-    };
-    if (ctx.trigger !== 'candidate') {
-      await api(ctx, repoPath(ctx, `actions/runs/${runId}/cancel`), { method: 'POST' });
-      const ended = await poll(ctx, step.deadline, async () => {
-        const jobs = (await jobsOf(ctx, runId)).filter((/** @type {any} */ j) => waiting.some((/** @type {any} */ w) => w.id === j.id));
-        const open = jobs.filter((/** @type {any} */ j) => j.status !== 'completed');
-        return open.length ? unmet(`${open.map((/** @type {any} */ j) => `\`${j.name}\``).join(', ')} of run ${runId} hasn't ended since the cancel`) : met(jobs);
-      }, end);
-      const wrong = ended.filter((/** @type {any} */ j) => j.conclusion !== 'cancelled');
-      if (wrong.length) throw new Fail(`run ${runId} was cancelled at ${step.environment}'s wait, and ${wrong.map((/** @type {any} */ j) => `\`${j.name}\` ended \`${j.conclusion}\``).join(', ')}, not \`cancelled\``);
-      return record('cancelled');
-    }
-    const url = `https://github.com/${ctx.repository}/actions/runs/${runId}`;
-    const request = await api(ctx, `repos/${ctx.harness}/issues`, {
-      method: 'POST',
-      body: {
-        title: `Approve ${step.environment} for Kanon ${ctx.release} in ${ctx.repository}`,
-        body: `The scenario \`${ctx.scenario.id}\` waits on the Owner's approval of the environment \`${step.environment}\`, for Kanon \`${ctx.release}\` (Kanon plan 0012, decision 9).\n\nReview the deployment: ${url}\n\nThe harness closes this issue once the decision is made.`,
-      },
-    });
-    const decision = await poll(ctx, step.deadline, async () => {
-      const approvals = await api(ctx, repoPath(ctx, `actions/runs/${runId}/approvals`));
-      const found = approvals.find((/** @type {any} */ a) => (a.environments ?? []).some((/** @type {any} */ e) => e.name === step.environment));
-      return found ? met(found.state) : unmet(`the Owner hasn't decided on ${step.environment} yet (${url})`);
+    await api(ctx, repoPath(ctx, `actions/runs/${runId}/cancel`), { method: 'POST' });
+    const ended = await poll(ctx, step.deadline, async () => {
+      const jobs = (await jobsOf(ctx, runId)).filter((/** @type {any} */ j) => waiting.some((/** @type {any} */ w) => w.id === j.id));
+      const open = jobs.filter((/** @type {any} */ j) => j.status !== 'completed');
+      return open.length ? unmet(`${open.map((/** @type {any} */ j) => `\`${j.name}\``).join(', ')} of run ${runId} hasn't ended since the cancel`) : met(jobs);
     }, end);
-    await api(ctx, `repos/${ctx.harness}/issues/${request.number}`, { method: 'PATCH', body: { state: 'closed' } });
-    record(decision);
+    const wrong = ended.filter((/** @type {any} */ j) => j.conclusion !== 'cancelled');
+    if (wrong.length) throw new Fail(`run ${runId} was cancelled at ${step.environment}'s wait, and ${wrong.map((/** @type {any} */ j) => `\`${j.name}\` ended \`${j.conclusion}\``).join(', ')}, not \`cancelled\``);
+    ctx.state.approvals = { ...ctx.state.approvals, [step.environment]: { run: runId, decision: 'cancelled', jobs: waiting.map((/** @type {any} */ j) => j.name) } };
   },
 };
