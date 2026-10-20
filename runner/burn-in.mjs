@@ -11,6 +11,11 @@
 //     marker, and neither counts nor breaks; nor does a run that didn't plan the scenario, one
 //     against an older stable release, or one whose commit is before the change.
 //
+// A re-run counts by its first attempt (the Owner's answer of 2026-10-20, harness #52). A result
+// belongs to the run, not to the attempt: a re-run of the scenario's job overwrites it, so a
+// result that attempt 1 didn't write breaks the run of passes, whatever the re-run read. The run
+// is dated by its creation, since GitHub resets `run_started_at` on a re-run.
+//
 // It reads the runs' markers and results from their artifacts, and Kanon's public releases. It
 // writes nothing but a scratch directory it removes, and holds no key: it needs a token only
 // because an artifact's download answers 401 without one.
@@ -37,7 +42,11 @@ const K = `repos/${SETTINGS.kanon}`;
 const WORKFLOW = '.github/workflows/e2e.yml';
 const RESULTS = ['pass', 'fail', 'infra', 'skipped'];
 
-/** @typedef {{ run: number, url: string, startedAt: string, trigger: string, release: string, result: string, pass: boolean }} Row */
+/**
+ * `attempts` is the run's latest attempt; `attempt` the one whose result was read, or null when
+ * none was, or it named none; `rerun` what a result a later attempt wrote read.
+ * @typedef {{ run: number, url: string, startedAt: string, trigger: string, release: string, result: string, pass: boolean, attempts: number, attempt: number | null, rerun?: string }} Row
+ */
 
 /**
  * An artifact's one JSON file, or null when it holds none that parses. A failed download throws.
@@ -100,16 +109,17 @@ export async function count(scenario, deps) {
     // Its commit holds the change, or it ran before it: a re-run keeps its first commit.
     const holds = (await api(ctx, `${H}/compare/${since.sha}...${run.head_sha}`))?.status;
     if (holds !== 'ahead' && holds !== 'identical') continue;
-    runs.push({ run, list, startedAt: String(run.run_started_at ?? run.created_at) });
+    const attempts = Number(run.run_attempt ?? 1);
+    runs.push({ run, list, attempts, startedAt: String(attempts > 1 ? run.created_at : run.run_started_at ?? run.created_at) });
   }
   runs.sort((x, y) => Date.parse(x.startedAt) - Date.parse(y.startedAt));
 
   /** @type {Row[]} */
   const rows = [];
-  for (const { run, list, startedAt } of runs) {
+  for (const { run, list, attempts, startedAt } of runs) {
     const marker = list.find((a) => MARKER.test(String(a.name)));
-    const row = (/** @type {string} */ trigger, /** @type {string} */ release, /** @type {string} */ result) => rows.push({
-      run: Number(run.id), url: String(run.html_url), startedAt, trigger, release, result, pass: result === 'pass',
+    const row = (/** @type {string} */ trigger, /** @type {string} */ release, /** @type {string} */ result, /** @type {Partial<Row>} */ more = {}) => rows.push({
+      run: Number(run.id), url: String(run.html_url), startedAt, trigger, release, result, pass: result === 'pass', attempts, attempt: null, ...more,
     });
     // An expired marker can't say what the run planned, so it can't be taken to have passed.
     if (marker.expired) { row(/** @type {RegExpMatchArray} */ (String(marker.name).match(MARKER))[1], '', 'expired'); continue; }
@@ -124,7 +134,12 @@ export async function count(scenario, deps) {
     if (!artifact) { row(trigger, release, 'no result'); continue; }
     if (artifact.expired) { row(trigger, release, 'expired'); continue; }
     const r = await download(ctx, run.id, artifact.name, 'result.json');
-    row(trigger, release, r?.scenario === scenario && RESULTS.includes(r?.result) ? r.result : 'unreadable');
+    const result = r?.scenario === scenario && RESULTS.includes(r?.result) ? r.result : 'unreadable';
+    // The attempt that wrote it. A run with one attempt can hold no other's result.
+    const own = String(r?.run?.id) === String(run.id) && /^[1-9][0-9]{0,3}$/.test(String(r?.run?.attempt));
+    const attempt = own ? Number(r.run.attempt) : attempts === 1 ? 1 : null;
+    if (attempt === 1 || result === 'unreadable') row(trigger, release, result, { attempt });
+    else row(trigger, release, 're-run', { attempt, rerun: result });
   }
 
   const broke = rows.findLastIndex((r) => !r.pass);
@@ -135,12 +150,20 @@ export async function count(scenario, deps) {
 /** A run's start, to the minute. @param {string} iso */
 const when = (iso) => `${new Date(iso).toISOString().slice(0, 16).replace('T', ' ')} UTC`;
 
+/** A row's result, and its attempt when its run has more than one. @param {Row} r */
+const outcome = (r) => {
+  const shown = r.pass ? 'pass' : `**${r.result}**`;
+  if (r.result === 're-run') return `${shown}: attempt ${r.attempt ?? '?'} of ${r.attempts} read ${r.rerun}; attempt 1's result is gone`;
+  if (r.attempts === 1) return shown;
+  return r.attempt ? `${shown} (attempt ${r.attempt} of ${r.attempts})` : `${shown} (${r.attempts} attempts)`;
+};
+
 /** The table, for the flip's pull request's body. @param {Awaited<ReturnType<typeof count>>} c */
 export const render = (c) => {
   const lines = [];
   if (c.rows.length) {
     lines.push('| Run | Date | Trigger | Release | Result |', '|---|---|---|---|---|');
-    for (const r of c.rows) lines.push(`| [${r.run}](${r.url}) | ${when(r.startedAt)} | ${r.trigger || '?'} | ${r.release ? `\`${r.release}\`` : '?'} | ${r.pass ? 'pass' : `**${r.result}**`} |`);
+    for (const r of c.rows) lines.push(`| [${r.run}](${r.url}) | ${when(r.startedAt)} | ${r.trigger || '?'} | ${r.release ? `\`${r.release}\`` : '?'} | ${outcome(r)} |`);
   } else {
     lines.push('No run of `e2e.yml` on `main` counts or breaks yet.');
   }
