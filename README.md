@@ -110,6 +110,18 @@ Dispatch the family:
 gh workflow run e2e.yml -R kanon-e2e/harness -f release=<candidate> -f select=doctor
 ```
 
+**The `lane-check` family** (plan 0012 step E12, family `lane`, no model, `gate: false` until burn-in). Three scenarios install Kanon's **Review** feature as `install-review` does, and hold `Lane check` green on the install's push. Each then opens two pull requests that rewrite the `apps-check` caller `init` wrote. One carries a breakage an adopter plausibly makes, and `Lane check` must fail it, by its run's job and by its check run. The other keeps the caller as `init` writes it, and `Lane check` must pass it. The two differ only in the breakage. `files.commit` fills in `{{release}}` in the scenario's files, so the correct caller pins the release under test.
+
+- **`lane-check-inexact-pin`** ([`lane-check-inexact-pin/`](scenarios/lane-check-inexact-pin/README.md), `gate: false`). The caller pinned to `@main`, not an exact version.
+- **`lane-check-mixed-pin`** ([`lane-check-mixed-pin/`](scenarios/lane-check-mixed-pin/README.md), `gate: false`). The caller left at `v0.40.2` beside the release under test: two versions in one repository.
+- **`lane-check-secrets-inherit`** ([`lane-check-secrets-inherit/`](scenarios/lane-check-secrets-inherit/README.md), `gate: false`). The caller passing `secrets: inherit` to Kanon's workflow, in place of the two Judge secrets mapped by name.
+
+Dispatch the family:
+
+```sh
+gh workflow run e2e.yml -R kanon-e2e/harness -f release=<candidate> -f select=lane
+```
+
 ## Runs
 
 **A scenario's life** (plan 0012 §5.1). `provision` creates a fresh public repository, `e2e-<scenario>-<run>-<attempt>`, empty, with the scenario's test Apps' secrets and the `kanon-e2e` topic. Each phase is then a `kanon` job, which runs Kanon's code at the release under test in a clone with a read-only token and writes nothing to GitHub, and an `act` job, which pushes what Kanon wrote and does the rest with the harness's own code. The first `act` job lays `start/` as the repository's first commit. The `act` job that learns the result ends the repository. [`docs/jobs.md`](docs/jobs.md) lists every job, which secret each holds and why, and the sizing.
@@ -154,6 +166,7 @@ gh workflow run e2e.yml -R kanon-e2e/harness -f release=<candidate> -f select=do
 - `tests/install-scenarios.test.mjs` holds the four install scenarios to their issues' acceptance criteria (#41, #59): each `scenario.json`, the order of the steps, the end of bootstrap before doctor, what each expectation holds, every pin held to `{{release}}`, and what `install-python`'s `start/` took from Kanon's fixture and left out.
 - `tests/upgrade-scenarios.test.mjs` holds the two upgrade scenarios to their issue's acceptance criteria (#42): each `scenario.json`, the install at the older release through `kanon.at` and `register.write`'s `release`, the upgrade's steps in order, the merge through a pull request, the end of bootstrap after it (#59), and the final doctor held to `{{release}}` with no `pin.mixed`.
 - `tests/doctor-scenarios.test.mjs` holds the three doctor-broken scenarios to their issue's acceptance criteria (E12): each `scenario.json` with `gate: false`, each one `install-review`'s steps less or plus only its break, the final doctor held to `findings`, exit 1, only `secrets` unchecked and exactly its one blocking finding, and `doctor-id-token`'s `Publish` workflow. It also holds E12's mutation: each scenario's own `expect.doctor` step passes on the document its break makes, and fails on the clean install's document, on a copy expecting a finding doctor doesn't report or the install's `incomplete`, on a second blocking finding, and on the break reported as not blocking.
+- `tests/lane-check-scenarios.test.mjs` holds the three lane-check scenarios to E12's criteria. It also runs E12's mutation: a copy expecting `Lane check` green on the breakage, a lane-check without the broken rule, and a correct pull request holding the breakage each read `fail`.
 - `tests/workflows.test.mjs` holds the harness's workflows to plan 0012 §5.2: no job that holds an App key runs someone else's code, each environment is named only by the jobs §5.2 lists and the probes, no `-job` workflow names a private key, no workflow runs on a pull-request event with a secret, other than those Kanon's own lane callers map by name into their lane, and `e2e.yml`'s `verdict` holds `issues: write` through its workflow token and no key.
 - `tests/e2e-workflows.test.mjs` holds `e2e.yml` and its pairs to plan 0012 §5.2: the jobs, their order and conditions, each pair's mint and token, the read-only `kanon` token, an `act` job that runs no Kanon code, and every matrix's max-parallel and every job's timeout held to `runner/settings.json`.
 - `tests/runner.test.mjs` tests the runner a segment at a time on a stubbed `gh` and `npx` and a real `git`, each `git` call stubbable: pass, fail and infra, the retries of `gh` and `git`, the state, and how the repository ends.

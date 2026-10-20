@@ -1,0 +1,18 @@
+# Checks each agent App in the register against its installation (docs/apps.md). Run it by hand:
+#   gh workflow run apps-check.yml
+# The caller as `kanon init` writes it: pinned to the release, each secret mapped by name.
+name: apps-check
+
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  apps:
+    permissions:
+      contents: read
+    uses: yedeya-labs/kanon/.github/workflows/apps-check.yml@{{release}}
+    secrets:
+      JUDGE_APP_ID: ${{ secrets.JUDGE_APP_ID }}
+      JUDGE_APP_PRIVATE_KEY: ${{ secrets.JUDGE_APP_PRIVATE_KEY }}
