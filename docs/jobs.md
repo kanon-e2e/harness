@@ -96,3 +96,14 @@ Kanon's release gate (plan 0012 §8.2, Kanon's step E11) reads five facts for a 
 - A counted scenario that read `fail`, or `skipped` (such as `skipped: budget`), gives `fail`. One that read `infra`, or left no result, gives `infra-only`, unless another counted scenario failed.
 - A candidate's run with no `gate: true` scenario gives `fail`, "no scenario gates yet", never `pass`.
 - While the candidate's red issue is open and holds a `fail`, every run of that candidate gives `fail`, whatever its scenarios did.
+
+## The upgrade signal's jobs
+
+`.github/workflows/upgrade-signal.yml` runs weekly and on dispatch, outside `e2e.yml` (plan 0012 step E14; [the README](../README.md#the-upgrade-signal)). It splits as a scenario's phase does: Kanon's code in one job, the harness's in another, and only the second writes. Its only credential is the workflow's token. `tests/upgrade-signal.test.mjs` holds it to this table.
+
+| Job | Environment | Holds | Does |
+|---|---|---|---|
+| `doctor` | none | the workflow's own token: `actions`, `checks`, `contents`, `issues` read | Checks out `main`, with its history, and runs `kanon doctor --json` there with `npx`, at the one release the harness's workflows pin. Keeps the document as the `upgrade-signal-doctor` artifact. Writes nothing to GitHub. |
+| `signal` | none | the workflow's own token: `actions` and `contents` read, `issues: write` | Runs `runner/upgrade-signal.mjs`, the harness's code alone: reads doctor's document as data, Kanon's releases and the latest completed `release.yml` run on `main`, then opens, edits or closes the one `long-lived upgrade behind` issue. |
+
+**What `doctor`'s code can reach.** The release the harness pins runs with read permissions, so the worst it can do is plant a document that reads healthy, which only keeps the issue closed. That is the same release every lane of the harness already runs.
