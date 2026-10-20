@@ -19,11 +19,14 @@ const at = (hours) => new Date(T0 + hours * 3_600_000).toISOString();
 
 /**
  * One run of `e2e.yml`, as the world holds it. `marker: false` is a run whose `plan` stopped;
- * `result: null` one that planned the scenario and left no result.
+ * `result: null` one that planned the scenario and left no result. `attempts` is the run's
+ * latest attempt, `resultAttempt` the one that wrote its result, and `rerunHours` when the
+ * latest attempt started: GitHub resets `run_started_at` on a re-run, never `created_at`.
  */
 const run = (id, o = {}) => ({
   id, hours: id, trigger: 'nightly', release: 'v0.40.2', scenarios: [ID], result: 'pass', marker: true,
-  branch: 'main', path: '.github/workflows/e2e.yml', status: 'completed', before: false, expired: [], ...o,
+  branch: 'main', path: '.github/workflows/e2e.yml', status: 'completed', before: false, expired: [],
+  attempts: 1, resultAttempt: '1', rerunHours: null, ...o,
 });
 
 /**
@@ -41,7 +44,7 @@ const world = (runs, { rels = [['v0.40.1', -100], ['candidate-v0.40.2', -50], ['
   });
   const files = Object.fromEntries(runs.flatMap((r) => [
     [`${r.id} ${artifacts.find((a) => a.workflow_run.id === r.id && a.name.startsWith('e2e-'))?.name}`, { 'marker.json': JSON.stringify({ trigger: r.trigger, release: r.release, scenarios: r.scenarios }) }],
-    [`${r.id} kanon-e2e-result-${ID}`, { 'result.json': r.resultFile ?? JSON.stringify({ scenario: ID, release: r.release, trigger: r.trigger, result: r.result }) }],
+    [`${r.id} kanon-e2e-result-${ID}`, { 'result.json': r.resultFile ?? JSON.stringify({ scenario: ID, release: r.release, trigger: r.trigger, run: { id: String(r.id), attempt: r.resultAttempt }, result: r.result }) }],
   ]));
   const routes = {
     [`GET ${H}/commits?sha=main&path=scenarios/${ID}/steps.json&per_page=1`]: stepsChange ? [{ sha: CHANGE, commit: { committer: { date: at(-200) } } }] : [],
@@ -50,7 +53,7 @@ const world = (runs, { rels = [['v0.40.1', -100], ['candidate-v0.40.2', -50], ['
     [`GET ${H}/actions/artifacts?per_page=100`]: [{ total_count: artifacts.length, artifacts }],
     ...Object.fromEntries(runs.map((r) => [`GET ${H}/actions/runs/${r.id}`, {
       id: r.id, html_url: `https://github.com/kanon-e2e/harness/actions/runs/${r.id}`, path: r.path, head_branch: r.branch, head_sha: `h${r.id}`,
-      status: r.status, created_at: at(r.hours), run_started_at: at(r.hours),
+      status: r.status, created_at: at(r.hours), run_started_at: at(r.rerunHours ?? r.hours), run_attempt: r.attempts,
     }])),
     ...Object.fromEntries(runs.map((r) => [`GET ${H}/compare/${start?.sha ?? CHANGE}...h${r.id}`, { status: r.before ? 'behind' : 'ahead' }])),
   };
@@ -118,6 +121,54 @@ describe('the run of passes (§10, the Owner\'s rule of 2026-10-18)', () => {
       expect(out.streak).toBe(2);
       expect(out.rows.find((r) => r.run === 4)).toMatchObject({ pass: false, result: 'expired' });
     }
+  });
+});
+
+describe('a re-run counts by its first attempt (the Owner\'s answer of 2026-10-20, harness #52)', () => {
+  it('breaks the run of passes on a result a re-run wrote: the first attempt\'s, which it replaced, is gone', async () => {
+    // Attempt 1 read `fail` or `infra`; its `kanon-e2e-result-*` was overwritten by attempt 2's pass.
+    const out = await burnIn([...passes(3), run(4, { attempts: 2, resultAttempt: '2', rerunHours: 40 }), ...passes(2, 5)]);
+    expect(out.streak).toBe(2);
+    expect(out.burntIn).toBe(false);
+    expect(out.rows.find((r) => r.run === 4)).toMatchObject({ pass: false, result: 're-run', rerun: 'pass', attempt: 2, attempts: 2 });
+  });
+
+  it('counts a re-run\'s nine passes in a row as nine, not ten', async () => {
+    const out = await burnIn([...passes(9), run(10, { attempts: 3, resultAttempt: '3' })]);
+    expect(out.streak).toBe(0);
+    expect(out.burntIn).toBe(false);
+  });
+
+  it('counts by the first attempt\'s result when a re-run left it in place: a pass counts, a fail breaks', async () => {
+    // "Re-run failed jobs" re-runs only another scenario's jobs; this one's result is attempt 1's.
+    const pass = await burnIn([...passes(9), run(10, { attempts: 2, resultAttempt: '1', rerunHours: 40 })]);
+    expect(pass.streak).toBe(10);
+    expect(pass.burntIn).toBe(true);
+    expect(pass.rows.find((r) => r.run === 10)).toMatchObject({ pass: true, result: 'pass', attempt: 1, attempts: 2 });
+    const fail = await burnIn([...passes(3), run(4, { attempts: 2, resultAttempt: '1', result: 'fail' }), ...passes(2, 5)]);
+    expect(fail.streak).toBe(2);
+    expect(fail.rows.find((r) => r.run === 4)).toMatchObject({ pass: false, result: 'fail', attempt: 1 });
+  });
+
+  it('breaks the run on a re-run\'s result that names no attempt, or another run\'s', async () => {
+    for (const resultFile of [
+      JSON.stringify({ scenario: ID, result: 'pass' }),
+      JSON.stringify({ scenario: ID, run: { id: '4', attempt: 'one' }, result: 'pass' }),
+      JSON.stringify({ scenario: ID, run: { id: '99', attempt: '1' }, result: 'pass' }),
+    ]) {
+      const out = await burnIn([...passes(3), run(4, { attempts: 2, resultFile }), ...passes(2, 5)]);
+      expect(out.streak, resultFile).toBe(2);
+      expect(out.rows.find((r) => r.run === 4), resultFile).toMatchObject({ pass: false, result: 're-run', attempt: null, attempts: 2 });
+    }
+  });
+
+  it('dates a re-run by its first attempt: its order, and the latest stable release then', async () => {
+    // Run 1 started before v0.40.2 was out, against v0.40.1, and was re-run after: still v0.40.1's.
+    const out = await burnIn([
+      run(1, { hours: -10, release: 'v0.40.1', attempts: 2, rerunHours: 50 }), run(2, { hours: -5, release: 'v0.40.1' }),
+    ]);
+    expect(out.rows.map((r) => [r.run, r.release, r.startedAt])).toEqual([[1, 'v0.40.1', at(-10)], [2, 'v0.40.1', at(-5)]]);
+    expect(out.streak).toBe(2);
   });
 });
 
@@ -230,6 +281,21 @@ describe('the table', () => {
 
   it('says when a scenario is burnt in', async () => {
     expect(render(await burnIn(passes(10)))).toContain(`**\`${ID}\`: 10 passes in a row**: burnt in`);
+  });
+
+  it('shows the attempt of a run that has more than one, and what a re-run read', async () => {
+    const out = await burnIn([
+      run(1), run(2, { attempts: 2 }), run(3, { attempts: 2, resultAttempt: '2', result: 'pass' }),
+      run(4, { attempts: 3, result: null }), run(5, { attempts: 2, resultAttempt: '2', result: 'fail' }),
+    ]);
+    const cells = render(out).split('\n').filter((l) => /^\| \[/.test(l)).map((l) => l.split(' | ').at(-1));
+    expect(cells).toEqual([
+      'pass |',
+      'pass (attempt 1 of 2) |',
+      '**re-run**: attempt 2 of 2 read pass; attempt 1\'s result is gone |',
+      '**no result** (3 attempts) |',
+      '**re-run**: attempt 2 of 2 read fail; attempt 1\'s result is gone |',
+    ]);
   });
 
   it('says so when no run counts yet', async () => {
