@@ -20,6 +20,7 @@
     "provision": 10,
     "mint": 5,
     "modelKey": 5,
+    "authorLabel": 5,
     "kanon": 20,
     "act": 30,
     "gate": 5
@@ -44,7 +45,7 @@
     "failedKeepHours": "Plan 0012 decision 13: a failed scenario's repository is kept 24 hours.",
     "maxModelScenarios": "Plan 0012 decision 15: at most two real-model scenarios a run.",
     "ledger": "Plan 0012 §6.2, decision 7 as changed (step E10): the Owner's cap of $2 for a run of the real-model tier (decision 4); a scenario's expected cost is the largest cost its last 10 recorded runs reported, times 1.5 (runner/ledger.mjs).",
-    "minutes": "Plan 0012 §5.2's timeouts: provision 10; each mint 5; the model-key job 5; a kanon job 20; an act job 30. The gate before phases 2 and 3 (harness #62) is the harness's, not §5.2's: 5, as a mint, for a checkout, a download and one node script.",
+    "minutes": "Plan 0012 §5.2's timeouts: provision 10; each mint 5; the model-key job 5; a kanon job 20; an act job 30. The Author's label job (E10, the Owner 2026-10-20) is the harness's: 5, as the model-key job, for three `gh` steps. The gate before phases 2 and 3 (harness #62) is the harness's, not §5.2's: 5, as a mint, for a checkout, a download and one node script.",
     "candidateRunsMax": "Plan 0012 §7: at most six runs for one candidate.",
     "neutralRerunAfterMinutes": "Plan 0012 §7: a neutral check run is re-run by the poll, at most hourly.",
     "nightlyFloorDays": "Plan 0012 §7, decision 4: a nightly runs when Kanon's main changed, or when no nightly ran in seven days.",

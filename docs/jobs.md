@@ -10,6 +10,7 @@ What `e2e.yml` and the weekly upgrade signal (`upgrade-signal.yml`) run, which j
 | `start` | `e2e-report` | the Reporter's key | A candidate's run only: creates the `kanon-e2e` check run on the candidate's commit, `in_progress`, with `external_id` `<run id>-<run attempt>` and `details_url` the run's page. Its name records the candidate: `start (the Reporter's check run: <tag> at <40-hex sha>)`. |
 | `provision` | `e2e` | the driver's key; the test Apps' ids and keys | For each scenario: creates the public repository `e2e-<scenario>-<run>-<attempt>`, empty, with the `kanon-e2e` topic; writes the Apps the scenario lists as `<APP>_APP_ID` and `<APP>_APP_PRIVATE_KEY`; sets the merge settings the release under test's merge-settings guard checks (`K-ADOPT-1` step 5), read from its `release.yml`, before anything reaches the default branch; adds `kanon-e2e-provisioned`. |
 | `model-key` | `e2e` (`mint`), `e2e-model` (the job) | the driver's key (`mint`); the real-model token (the job) | For each `claude: subscription` scenario the ledger admitted, `plan`'s `model-scenarios`: writes `CLAUDE_CODE_OAUTH_TOKEN` into its repository. A refused scenario has no repository and gets no token. |
+| `author-label` | `e2e` (`mint`) | the Author's key (`mint`); the Author's label token (the job) | After `act-1`, for each planned scenario whose `scenario.json` names an `authorLabel` (`plan`'s `author-labels`): applies the label to the open pull request from its branch, with `gh` alone, as the test Author. A model lane's gate admits the Author, a member of the scenario's App register, and never the driver (K-AGENT-45). It labels nothing, and says so, when the repository is archived or no such pull request is open. `gate-2` waits for it. |
 | `kanon-1` … `kanon-3` | `e2e` (`mint`) | the driver's key (`mint`); a read-only token (the job) | Phase *n*'s `kanon` segment: Kanon's code at the release under test, in a clone. |
 | `act-1` … `act-3` | `e2e` (`mint`) | the driver's key (`mint`); the act token (the job) | Phase *n*'s `act` segment: the harness's code, pushing what Kanon wrote and doing the rest. The job that learns the result ends the repository. |
 | `gate-2`, `gate-3` | none | the workflow's own token, `contents: read`; no key | Before phase *n*'s `kanon` job: decides the scenarios phase *n* runs (`runner/gate.mjs`, #62). It drops a scenario with fewer than *n* phases, and one whose `kanon-e2e-result-<scenario>` names this attempt's repository, because an earlier phase ended it and its repository was deleted or archived. Phase *n*'s `kanon` and `act` jobs take their matrix from it, and are skipped when it keeps none, so no mint is scoped to a repository that may be gone. It never fails for what it drops. |
@@ -23,7 +24,10 @@ What `e2e.yml` and the weekly upgrade signal (`upgrade-signal.yml`) run, which j
 | `e2e-kanon-run.yml` → `e2e-kanon-job.yml` | the one scenario repository; Contents, Issues, Pull requests, Actions, Administration **read**; no Workflows, no Secrets |
 | `e2e-act-run.yml` → `e2e-act-job.yml` | the one scenario repository; Contents, Workflows, Issues, Pull requests, Actions, Administration write; Secrets, Checks read |
 | `e2e-model-key-run.yml` → `e2e-model-key-job.yml` | the one scenario repository; Secrets write |
+| `e2e-author-label-run.yml` → `e2e-author-label-job.yml` | minted from the **Author's** key, not the driver's: the one scenario repository; Issues and Pull requests write. The job is three steps, receive, `gh` applies the label, revoke, with no checkout, no harness code and no Kanon code (K-AGENT-50) |
 | `e2e-janitor-run.yml` → `e2e-janitor-job.yml` | the whole test organisation; Administration write |
+
+**A change to plan 0012 §5.2 and §11** (the Owner, 2026-10-20, for E10). The plan has the test Apps' keys read only by `provision`, which writes them as each scenario repository's secrets. Now `e2e-author-label-run.yml`'s `mint` reads the Author's key too, in `e2e`, to mint a token for one repository with Issues and Pull requests write. A leak of that token can label, comment on and edit issues and pull requests in one throwaway repository for its hour, as the Author, which that repository's lanes admit as their Implementer: it can start a model lane there, on the subscription token the repository holds. It can push nothing and change no workflow or secret. The job that holds it runs only `gh`, on inputs from `plan`, which reads the catalogue at `main`.
 
 ## The kanon/act split (decision 23 (b))
 
@@ -85,9 +89,9 @@ A call to GitHub, by `gh` or by `git`'s clone, fetch, push and ls-remote, that f
 
 **One run at a time** (the Owner, 2026-10-17). So a run is sized against the organisation's limits alone, not shared with a second run. A job that `needs:` a matrix waits for all its entries. With 2 at once, each stage runs in waves of 2. A repository lives from its `provision` to the last wave of `act-3`. With *W* = ⌈*n* / 2⌉ waves and at most two real-model scenarios, its longest running time is
 
-*W* × 10 (provision) + ⌈min(*n*, 2) / 2⌉ × 10 (model key) + 3 × *W* × (25 + 35) (each phase's `kanon` and `act` pairs, mint included) + 2 × 5 (`gate-2` and `gate-3`, one job each, not in waves).
+*W* × 10 (provision) + ⌈min(*n*, 2) / 2⌉ × (10 (model key) + 10 (the Author's label, E10)) + 3 × *W* × (25 + 35) (each phase's `kanon` and `act` pairs, mint included) + 2 × 5 (`gate-2` and `gate-3`, one job each, not in waves).
 
-The **catalogue's cap** is the largest *n* whose longest running time fits the nightly interval and whose 2*n* repositories (each scenario, and its re-run) fit the hour's 80. That is **14 scenarios**. 14 scenarios take **22 h 30 min**, so a run ends inside the 24 hours before the next nightly.
+The **catalogue's cap** is the largest *n* whose longest running time fits the nightly interval and whose 2*n* repositories (each scenario, and its re-run) fit the hour's 80. That is **14 scenarios**. 14 scenarios take **22 h 40 min**, so a run ends inside the 24 hours before the next nightly.
 
 **The cap holds what a run plans, not the catalogue** (the Owner, 2026-10-20; `fitCap` in `runner/plan.mjs`). The catalogue may hold more than 14.
 - **A nightly, a candidate's run, or a dispatch of the whole catalogue** plans every `gate: true` scenario first, then as many `gate: false` ones as fit under the cap.
@@ -95,7 +99,7 @@ The **catalogue's cap** is the largest *n* whose longest running time fits the n
 - **A dispatch of one scenario or a family** plans what it selects, and is refused only when that selection itself passes the cap.
 - **When the `gate: true` scenarios alone pass the cap,** `plan` fails, as no run could hold the gate. Then the limit must rise, or a scenario must leave the gate.
 
-**The janitor's cut-offs** follow: the longest running time at the cap, plus 100 minutes' margin for queueing, is **24 h 10 min**. A repository with `kanon-e2e-failed` gets 24 hours more, **48 h 10 min**. It runs hourly (`e2e-janitor.yml`). It deletes only repositories with the `kanon-e2e` topic, never the harness. Its run fails, by name, on a repository older than a day that it couldn't delete.
+**The janitor's cut-offs** follow: the longest running time at the cap, plus 100 minutes' margin for queueing, is **24 h 20 min**. A repository with `kanon-e2e-failed` gets 24 hours more, **48 h 20 min**. It runs hourly (`e2e-janitor.yml`). It deletes only repositories with the `kanon-e2e` topic, never the harness. Its run fails, by name, on a repository older than a day that it couldn't delete.
 
 Change a setting and the tests name each place that must follow: the max-parallel on each matrix, each job's `timeout-minutes`, and the cut-offs.
 

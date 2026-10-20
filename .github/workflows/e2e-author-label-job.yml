@@ -1,0 +1,95 @@
+# e2e — the Author's label (Kanon plan 0012 §6.2, E10; the Owner, 2026-10-20)
+#
+# CALLED ONLY BY `e2e-author-label-run.yml`. One job, three steps and nothing else: receive the
+# Author's token, apply the label to the scenario repository's open pull request from `head`,
+# revoke the token. No checkout, no harness code, no Kanon code: nothing runs beside the token
+# but `gh`. A scenario that ended in phase 1 left its repository archived (`fail`) or with no such
+# pull request, and the job labels nothing and says so; the scenario's result is already set.
+name: e2e — the Author's label
+
+on:
+  workflow_call:
+    inputs:
+      repository-name:
+        required: true
+        type: string
+      head:
+        required: true
+        type: string
+      label:
+        required: true
+        type: string
+      mint-attempt:
+        description: The run attempt the `mint` job minted the token for; a token of an earlier attempt is refused by name.
+        required: true
+        type: string
+    secrets:
+      app-token:
+        description: The Author's token, hex-encoded by the `mint` job.
+        required: true
+
+jobs:
+  label:
+    name: apply the label as the Author
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Receive the App token
+        id: app-token
+        env:
+          SEALED: ${{ secrets.app-token }}
+          MINT_ATTEMPT: ${{ inputs.mint-attempt }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          if [ -z "$SEALED" ] || ! printf %s "$SEALED" | grep -Eq '^([0-9a-f]{2})+$'; then
+            echo "::error title=app-token::no App token arrived from the mint job; see that job's log for why the mint failed."
+            exit 1
+          fi
+          if [ "$MINT_ATTEMPT" != "$RUN_ATTEMPT" ]; then
+            echo "::error title=app-token::this is attempt $RUN_ATTEMPT, but the App token was minted for attempt $MINT_ATTEMPT and revoked when that attempt ended. Use \"Re-run all jobs\"."
+            exit 1
+          fi
+          TOKEN="$(printf '%b' "$(printf %s "$SEALED" | sed 's/../\\x&/g')")"
+          echo "::add-mask::$TOKEN"
+          echo "token=$TOKEN" >> "$GITHUB_OUTPUT"
+
+      - name: Apply the label to the open pull request, as the Author
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          REPOSITORY: kanon-e2e/${{ inputs.repository-name }}
+          HEAD: ${{ inputs.head }}
+          LABEL: ${{ inputs.label }}
+        run: |
+          set -euo pipefail
+          if [ "$(gh api "repos/$REPOSITORY" --jq .archived)" = "true" ]; then
+            echo "::notice title=author-label::$REPOSITORY is archived: the scenario already failed, so nothing is labelled."
+            exit 0
+          fi
+          number=$(gh api "repos/$REPOSITORY/pulls?state=open&head=kanon-e2e:$HEAD" --jq '.[0].number // empty')
+          if [ -z "$number" ]; then
+            echo "::notice title=author-label::no open pull request from $HEAD in $REPOSITORY: the scenario's phase 2 reads what that means."
+            exit 0
+          fi
+          gh api -X POST "repos/$REPOSITORY/issues/$number/labels" -f "labels[]=$LABEL" >/dev/null
+          echo "Labelled #$number in $REPOSITORY with $LABEL, as the Author."
+
+      - name: Revoke the App token
+        if: ${{ always() }}
+        env:
+          SEALED: ${{ secrets.app-token }}
+          MINT_ATTEMPT: ${{ inputs.mint-attempt }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          API_URL: ${{ github.api_url }}
+        run: |
+          if [ -z "$SEALED" ] || ! printf %s "$SEALED" | grep -Eq '^([0-9a-f]{2})+$' || [ "$MINT_ATTEMPT" != "$RUN_ATTEMPT" ]; then
+            echo "No App token of this attempt to revoke"
+            exit 0
+          fi
+          TOKEN="$(printf '%b' "$(printf %s "$SEALED" | sed 's/../\\x&/g')")"
+          echo "::add-mask::$TOKEN"
+          STATUS="$(curl -sS -o /dev/null -w '%{http_code}' -X DELETE \
+            -H "Authorization: Bearer $TOKEN" -H "Accept: application/vnd.github+json" \
+            "$API_URL/installation/token" || true)"
+          if [ "$STATUS" = "204" ]; then echo "App token revoked"; else echo "::warning title=app-token::the App token could not be revoked (HTTP ${STATUS:-none}); it expires within the hour"; fi

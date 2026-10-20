@@ -11,7 +11,9 @@ import { readWorkflows, workflowText } from './helpers/workflows.mjs';
 
 const docs = readWorkflows();
 const e2e = docs['e2e.yml'];
-const PAIRS = ['kanon', 'act', 'model-key', 'janitor'];
+const PAIRS = ['kanon', 'act', 'model-key', 'janitor', 'author-label'];
+/** The App each pair's `mint` holds the key of: the driver's, but the Author's for its label (E10). */
+const KEY_OF = (pair) => (pair === 'author-label' ? 'AUTHOR' : 'DRIVER');
 const TOKEN_ACTION = /^actions\/create-github-app-token@[0-9a-f]{40}$/;
 const SCENARIO_JOBS = ['kanon-1', 'act-1', 'kanon-2', 'act-2', 'kanon-3', 'act-3'];
 const GATES = ['gate-2', 'gate-3'];
@@ -51,7 +53,7 @@ describe('e2e.yml: its triggers, never a pull request (§7)', () => {
 
 describe('e2e.yml: the jobs of §5.2, in order', () => {
   it('holds exactly plan, start, provision, model-key, the six scenario jobs with a gate before phases 2 and 3, verdict and report', () => {
-    expect(Object.keys(e2e.jobs)).toEqual(['plan', 'start', 'provision', 'model-key', 'kanon-1', 'act-1', 'gate-2', 'kanon-2', 'act-2', 'gate-3', 'kanon-3', 'act-3', 'verdict', 'report']);
+    expect(Object.keys(e2e.jobs)).toEqual(['plan', 'start', 'provision', 'model-key', 'kanon-1', 'act-1', 'author-label', 'gate-2', 'kanon-2', 'act-2', 'gate-3', 'kanon-3', 'act-3', 'verdict', 'report']);
   });
 
   it('`plan` reads with the workflow\'s own token only, and records its marker before any repository is created', () => {
@@ -152,7 +154,7 @@ describe('e2e.yml: the jobs of §5.2, in order', () => {
 describe('the sizing and the timeouts follow runner/settings.json', () => {
   it('every matrix runs at maxParallel(), with fail-fast off, and says where the number comes from', () => {
     const matrixJobs = Object.entries(e2e.jobs).filter(([, j]) => j.strategy);
-    expect(matrixJobs.map(([n]) => n)).toEqual(['provision', 'model-key', ...SCENARIO_JOBS]);
+    expect(matrixJobs.map(([n]) => n)).toEqual(['provision', 'model-key', 'kanon-1', 'act-1', 'author-label', 'kanon-2', 'act-2', 'kanon-3', 'act-3']);
     for (const [name, job] of matrixJobs) {
       expect(job.strategy['max-parallel'], name).toBe(maxParallel());
       expect(job.strategy['fail-fast'], name).toBe(false);
@@ -166,6 +168,7 @@ describe('the sizing and the timeouts follow runner/settings.json', () => {
     expect(e2e.jobs.provision['timeout-minutes']).toBe(SETTINGS.minutes.provision);
     for (const pair of PAIRS) expect(docs[`e2e-${pair}-run.yml`].jobs.mint['timeout-minutes'], pair).toBe(SETTINGS.minutes.mint);
     expect(only(docs['e2e-model-key-job.yml'])['timeout-minutes']).toBe(SETTINGS.minutes.modelKey);
+    expect(only(docs['e2e-author-label-job.yml'])['timeout-minutes']).toBe(SETTINGS.minutes.authorLabel);
     expect(only(docs['e2e-kanon-job.yml'])['timeout-minutes']).toBe(SETTINGS.minutes.kanon);
     expect(only(docs['e2e-act-job.yml'])['timeout-minutes']).toBe(SETTINGS.minutes.act);
   });
@@ -181,13 +184,13 @@ describe('each pair: a `mint` that holds the key, and a job handed only the toke
       expect(mint.permissions).toEqual({});
       expect(mint.steps).toHaveLength(2);
       expect(mint.steps[0].uses).toMatch(TOKEN_ACTION);
-      expect(mint.steps[0].with).toMatchObject({ 'app-id': '${{ secrets.DRIVER_APP_ID }}', 'private-key': '${{ secrets.DRIVER_APP_KEY }}', owner: 'kanon-e2e', 'skip-token-revoke': 'true' });
+      expect(mint.steps[0].with).toMatchObject({ 'app-id': `\${{ secrets.${KEY_OF(pair)}_APP_ID }}`, 'private-key': `\${{ secrets.${KEY_OF(pair)}_APP_KEY }}`, owner: 'kanon-e2e', 'skip-token-revoke': 'true' });
       expect(mint.steps[1].run).toMatch(/od -An -v -tx1/);
       expect(mint.outputs.attempt).toBe('${{ github.run_attempt }}');
       expect(job).toMatchObject({ needs: 'mint', if: '${{ !cancelled() }}', uses: `./.github/workflows/e2e-${pair}-job.yml` });
       expect(job.with['mint-attempt']).toBe('${{ needs.mint.outputs.attempt }}');
       expect(job.secrets['app-token']).toBe('${{ needs.mint.outputs.sealed }}');
-      expect(Object.keys(run.on.workflow_call.secrets)).toEqual(expect.arrayContaining(['DRIVER_APP_ID', 'DRIVER_APP_KEY']));
+      expect(Object.keys(run.on.workflow_call.secrets)).toEqual([`${KEY_OF(pair)}_APP_ID`, `${KEY_OF(pair)}_APP_KEY`, ...(pair === 'model-key' ? ['E2E_CLAUDE_CODE_OAUTH_TOKEN'] : [])]);
     });
 
     it(`e2e-${pair}-job.yml is one job: it receives the token first, refusing an earlier attempt's, and revokes it last, always`, () => {
@@ -223,6 +226,11 @@ describe('each pair: a `mint` that holds the key, and a job handed only the toke
     expect(mintOf('model-key').with.repositories).toBe('${{ inputs.repository-name }}');
     expect(permissionsOf(mintOf('janitor'))).toEqual({ administration: 'write' });
   });
+
+  it('the Author\'s label token labels only, in the one repository: Issues and Pull requests write (E10)', () => {
+    expect(permissionsOf(mintOf('author-label'))).toEqual({ issues: 'write', 'pull-requests': 'write' });
+    expect(mintOf('author-label').with.repositories).toBe('${{ inputs.repository-name }}');
+  });
 });
 
 describe('the `kanon` and `act` jobs (§5.2)', () => {
@@ -254,6 +262,27 @@ describe('the `kanon` and `act` jobs (§5.2)', () => {
   it('the `act` job uploads the result only when it finalized the scenario', () => {
     const upload = act.steps.find((s) => s.with?.name === 'kanon-e2e-result-${{ inputs.scenario }}');
     expect(upload.if).toBe("${{ always() && steps.run.outputs.finalized == 'true' }}");
+  });
+
+  it('the Author\'s label job is three steps with no environment: receive, label with `gh`, revoke; no checkout, no harness or Kanon code (K-AGENT-50)', () => {
+    const job = only(docs['e2e-author-label-job.yml']);
+    expect(job.environment).toBeUndefined();
+    expect(job.permissions).toEqual({});
+    expect(job.steps).toHaveLength(3);
+    expect(job.steps.every((s) => s.uses === undefined)).toBe(true);
+    expect(job.steps[1].run).toMatch(/gh api -X POST "repos\/\$REPOSITORY\/issues\/\$number\/labels" -f "labels\[\]=\$LABEL"/);
+    expect(job.steps.map((x) => x.run).join('\n')).not.toMatch(/\bnode\b|\bnpx\b|\bnpm\b|runner\/|yedeya-labs\/kanon|checkout/);
+    expect(JSON.stringify(docs['e2e-author-label-run.yml'])).not.toMatch(/DRIVER|JUDGE|RELEASER|CLAUDE/);
+  });
+
+  it('`author-label` runs after phase 1 for the scenarios `plan` names, and phase 2 waits for it (E10)', () => {
+    const job = e2e.jobs['author-label'];
+    expect(job.needs).toEqual(['plan', 'start', 'act-1']);
+    expect(job.if).toBe("${{ !cancelled() && needs.start.result != 'failure' && needs.plan.outputs.go == 'true' && needs.plan.outputs.author-labels != '[]' }}");
+    expect(job.strategy.matrix.scenario).toBe('${{ fromJSON(needs.plan.outputs.author-labels) }}');
+    expect(job.secrets).toEqual({ AUTHOR_APP_ID: '${{ secrets.AUTHOR_APP_ID }}', AUTHOR_APP_KEY: '${{ secrets.AUTHOR_APP_KEY }}' });
+    expect(e2e.jobs.plan.outputs['author-labels']).toBe('${{ steps.plan.outputs.author-labels }}');
+    expect(e2e.jobs['gate-2'].needs).toContain('author-label');
   });
 
   it('the model-key job is three steps in `e2e-model`: receive, write the token, revoke; only the second reads the model token', () => {

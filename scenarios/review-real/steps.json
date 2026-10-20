@@ -1,0 +1,41 @@
+{
+  "phases": [
+    {
+      "kanon": [
+        { "verb": "kanon.init", "flags": ["--feature=review", "--review-trigger=labelled", "--claude-auth=subscription", "--no-sensitive-data"] },
+        { "verb": "register.write" },
+        { "verb": "expect.init", "status": "steps-left", "findings": ["label.create", "milestone.buckets", "ruleset.first-commit"], "fields": [{ "pointer": "/pin", "equals": "{{release}}" }] }
+      ],
+      "act": [
+        { "verb": "files.commit", "from": "kanon", "message": "Install Kanon's review feature" },
+        { "verb": "bootstrap.end", "move": "record" },
+        { "verb": "repo.apply", "firstCommit": true },
+        { "verb": "workflow.dispatch", "workflow": "apps-check.yml" },
+        { "verb": "run.await", "name": "apps-check", "workflow": "apps-check.yml", "event": "workflow_dispatch", "branch": "main", "deadline": 10 },
+        { "verb": "expect.run", "run": "apps-check", "conclusion": "success", "jobs": [{ "name": "apps / Judge", "conclusion": "success" }], "deadline": 2 },
+        { "verb": "run.await", "name": "ci", "workflow": "ci.yml", "event": "push", "branch": "main", "deadline": 10 },
+        { "verb": "expect.check", "branch": "main", "name": "Lane check", "conclusion": "success", "deadline": 5 },
+        { "verb": "repo.apply", "firstCommit": true },
+        { "verb": "bootstrap.end", "move": "approval" },
+        { "verb": "files.commit", "from": "scenario", "dir": "change", "branch": "docs-note", "message": "docs: add a note" },
+        { "verb": "pr.open", "name": "note", "head": "docs-note", "title": "docs: add a note", "body": "The real-model tier: a one-line documentation pull request for the Reviewer. The test Author labels it review:please after this phase." },
+        { "verb": "run.await", "name": "ci-note", "workflow": "ci.yml", "event": "pull_request", "pr": "note", "deadline": 10 }
+      ]
+    },
+    {
+      "kanon": [],
+      "act": [
+        { "verb": "expect.api", "path": "repos/{{repository}}/actions/workflows/agent-review.yml/runs?event=pull_request_target&branch=docs-note", "pointer": "/total_count", "equals": 2, "deadline": 5 },
+        { "verb": "run.await", "name": "review", "workflow": "agent-review.yml", "event": "pull_request_target", "pr": "note", "deadline": 25 }
+      ]
+    },
+    {
+      "kanon": [],
+      "act": [
+        { "verb": "expect.run", "run": "review", "conclusion": "success", "jobs": [{ "name": "review / filter", "conclusion": "success" }, { "name": "review / review", "conclusion": "success" }], "deadline": 2 },
+        { "verb": "expect.row", "run": "review", "lane": "review", "ceilingUsd": 30, "deadline": 5 },
+        { "verb": "expect.pr", "pr": "note", "marker": "role:reviewer", "markerBy": "kanon-e2e-judge", "deadline": 5 }
+      ]
+    }
+  ]
+}

@@ -348,6 +348,15 @@ describe('the real-model ledger in `plan` (§6.2, E10)', () => {
     expect(out.reason).toMatch(/refused by the real-model ledger: review-real \(skipped: budget/);
   });
 
+  it('hands the `author-label` job each planned scenario\'s `authorLabel`, and none for a scenario the ledger left out (E10)', async () => {
+    const labelled = CATALOGUE.map((x) => (x.id === 'review-real' ? { ...x, authorLabel: { head: 'docs-note', label: 'review:please' } } : x));
+    const ran = await plan({ event: 'schedule', schedule: POLL, catalogue: labelled }, world({ history: [0.5] }));
+    expect(ran.authorLabels).toEqual([{ id: 'review-real', head: 'docs-note', label: 'review:please' }]);
+    const refused = await plan({ event: 'schedule', schedule: POLL, catalogue: labelled }, world({ history: [3] }));
+    expect(refused.authorLabels).toEqual([]);
+    expect((await plan({ event: 'schedule', schedule: POLL, catalogue: labelled }, world())).authorLabels).toEqual([]);
+  });
+
   it('reads the history only for a run that goes ahead, and only for the real-model scenarios', async () => {
     const held = await nightly(world({ nightlyRecord: ago(60) }));
     expect(held.g.calls.some((c) => /kanon-e2e-result-/.test(c.key))).toBe(false);

@@ -30,6 +30,7 @@ scenarios/<scenario>/
 | `apps` | The test Apps the scenario repository gets: any of `author`, `judge`, `releaser`. |
 | `claude` | `none` or `subscription`: whether the scenario repository needs the real-model token. |
 | `deadlineMinutes` | The whole scenario's deadline, at most 120. |
+| `authorLabel` | Optional, for a `claude: subscription` scenario that lists `author`: `{ "head": <branch>, "label": <label> }`. After phase 1, the test Author applies the label to the open pull request from that branch, in `e2e.yml`'s `author-label` job, so a model lane's membership gate admits it ([`docs/jobs.md`](docs/jobs.md)). Phase 1 must open that pull request, and the scenario needs a phase 2. |
 
 **`start/`** is copied as it is, regular files only, with two substitutions and no others: `{{release}}`, the release under test, and `{{repository}}`, the scenario repository's `<owner>/<name>`. A workflow's `${{ … }}` is not a substitution, and a binary file is copied untouched.
 
@@ -140,7 +141,9 @@ gh workflow run e2e.yml -R kanon-e2e/harness -f release=<candidate> -f select=re
 gh workflow run e2e.yml -R kanon-e2e/harness -f release=<candidate> -f select=<scenario>
 ```
 
-**The tier has no scenario yet.** The first, `review-real`, would have the Reviewer review a one-line documentation pull request. The review lane starts only on `review:please` applied by a member or a registered agent App (Kanon's `scripts/lane-gate.mjs`, `K-AGENT-45`). Every event the harness makes in a scenario repository is the driver App's, which no register names, so the lane refuses it before the model runs: [`refuse-review-label`](scenarios/refuse-review-label/README.md) holds exactly that refusal. A scenario for it waits on the Owner's choice of an admitted identity to apply the label.
+**Who starts the lane.** A model lane starts only on an event by a member or a registered agent App (Kanon's `scripts/lane-gate.mjs`, `K-AGENT-45`), and every event the harness makes is the driver App's, which no register names ([`refuse-review-label`](scenarios/refuse-review-label/README.md) holds that refusal). So a scenario's `authorLabel` has the test Author, which its register names, apply the label after phase 1, in a `gh`-only job of its own (the Owner, 2026-10-20).
+
+- **`review-real`** ([`review-real/`](scenarios/review-real/README.md), family `lane`, `gate: false`). The Reviewer reviews a one-line documentation pull request in a fresh install of the **Review** feature, with the Author and the Judge. The Author labels it `review:please`. The review run must succeed, its row must record a cost under $30, and the Judge must post a verdict, by the Reviewer's role marker. Until it has a recorded cost, it runs only on the Owner's dispatch, alone.
 
 ## Runs
 
@@ -217,6 +220,7 @@ gh workflow run upgrade-signal.yml -R kanon-e2e/harness
 - `tests/runner.test.mjs` tests the runner a segment at a time on a stubbed `gh` and `npx` and a real `git`, each `git` call stubbable: pass, fail and infra, the retries of `gh` and `git`, the state, and how the repository ends.
 - `tests/artifact.test.mjs` holds the `act` job to taking the `kanon` job's tree as data: a hostile tree runs nothing, reads nothing outside it, and pushes nothing.
 - `tests/plan.test.mjs` tests `plan`'s decisions: the poll, the nightly, the dispatch, one run at a time, and the cap on what a run plans: gating scenarios always, the `gate: false` ones rotated by the day, and a dispatch refused only when its selection passes the cap. It names the test that turns red when a gating scenario is dropped to fit.
+- `tests/review-real.test.mjs` holds `review-real` to E10's criteria: its `scenario.json` and `authorLabel`, `install-review`'s install with `--claude-auth=subscription`, no label applied by the driver, the order of its waits and expectations, and its own expectations run on a reviewed run and on runs that must fail them. It also holds `authorLabel`'s validation.
 - `tests/ledger.test.mjs` holds `runner/ledger.mjs` to E10's criteria: a scenario whose expected cost would pass $2 is refused and one that fits starts; a scenario with no history runs only by the Owner's dispatch, alone; at most two a run; the history read from the results' `costUsd`. It names the two tests E10's mutation turns red: the ledger without its margin, and a scenario with no history started by the schedule.
 - `tests/burn-in.test.mjs` tests `runner/burn-in.mjs`'s count on a stubbed `gh`: what counts, what breaks, and what does neither, such as a run that gave way or one against an older stable release, and how a re-run counts.
 - `tests/verdict-report.test.mjs` holds `verdict` and `report` to plan 0012 §8.2 and §8.3 (#40), on fixtures. It covers: the gating scenarios on a candidate's run and every scenario elsewhere; `gate` read from `plan`, never from a result; `skipped: budget` failing the gate, taken from `plan`'s `skipped` over any artifact; "no scenario gates yet". It holds the red issue's filing, editing and closing by its marker, a quoted marker that never passes for one, a green run that never closes a `fail` and answers `fail` while one is open, and the `the Reporter can't post` issue. It holds `verdict.json`'s fields and the exit status, and `report`'s conclusion, its summary's links, and its retry. It also holds what Kanon's gate reads: the check run's fields and `start`'s name.

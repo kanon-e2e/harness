@@ -67,6 +67,8 @@ const ALLOWED = [
   ['e2e-act-run.yml', 'mint', 'e2e'],
   ['e2e-janitor-run.yml', 'mint', 'e2e'],
   ['e2e-model-key-run.yml', 'mint', 'e2e'],
+  // E10 (the Owner, 2026-10-20): the Author's key, for the label a model lane's gate admits.
+  ['e2e-author-label-run.yml', 'mint', 'e2e'],
   // The one job that writes the real-model key.
   ['e2e-model-key-job.yml', '*', 'e2e-model'],
   // The probes.

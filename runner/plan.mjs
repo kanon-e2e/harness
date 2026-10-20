@@ -92,14 +92,15 @@ const entry = (s) => ({ id: s.id, apps: s.apps, claude: s.claude, gate: s.gate =
 
 /**
 /**
- * `left` is the `gate: false` scenarios the cap left out of this run, by id; `skipped` is the
+ * `authorLabels` is the planned scenarios whose `authorLabel` the `author-label` job applies after
+ * phase 1, for its matrix. `left` is the `gate: false` scenarios the cap left out of this run, by id; `skipped` is the
  * scenarios the ledger refused for their cost, each with its `skipped` word, for `verdict`;
  * `ledger` is every real-model scenario's admission or refusal, with its reason.
- * @typedef {{ go: boolean, trigger: string, release: string, candidateSha: string, scenarios: any[], modelScenarios: any[], left: string[], skipped: any[], ledger: Array<{ id: string, started: boolean, reason: string }>, marker: string, reason: string }} Decision
+ * @typedef {{ go: boolean, trigger: string, release: string, candidateSha: string, scenarios: any[], modelScenarios: any[], authorLabels: Array<{ id: string, head: string, label: string }>, left: string[], skipped: any[], ledger: Array<{ id: string, started: boolean, reason: string }>, marker: string, reason: string }} Decision
  */
 
 /** A run that doesn't go ahead. @param {string} trigger @param {string} reason @param {Decision['ledger']} [ledger] @returns {Decision} */
-const stop = (trigger, reason, ledger = []) => ({ go: false, trigger, release: '', candidateSha: '', scenarios: [], modelScenarios: [], left: [], skipped: [], ledger, marker: '', reason });
+const stop = (trigger, reason, ledger = []) => ({ go: false, trigger, release: '', candidateSha: '', scenarios: [], modelScenarios: [], authorLabels: [], left: [], skipped: [], ledger, marker: '', reason });
 
 /**
  * Decides the run.
@@ -176,6 +177,7 @@ export async function decide(input, deps) {
     return /** @type {Decision} */ ({
       go: true, trigger, candidateSha: '', ...d, reason: `${d.reason ?? ''}${note}`, scenarios, ledger, left,
       modelScenarios: scenarios.filter(isModel),
+      authorLabels: chosen.filter((s) => !refusedIds.has(s.id) && s.authorLabel).map((s) => ({ id: s.id, head: s.authorLabel.head, label: s.authorLabel.label })),
       skipped: refused.filter((r) => r.skipped).map((r) => ({ id: r.id, gate: r.gate, skipped: r.skipped })),
     });
   };
@@ -230,7 +232,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   }, { gh: ghProcess(env), now: Date.now });
   const out = [
     `go=${d.go}`, `trigger=${d.trigger}`, `release=${d.release}`, `candidate-sha=${d.candidateSha}`,
-    `scenarios=${JSON.stringify(d.scenarios)}`, `model-scenarios=${JSON.stringify(d.modelScenarios)}`, `skipped=${JSON.stringify(d.skipped)}`, `marker=${d.marker}`, `reason=${d.reason.replace(/\s+/g, ' ')}`,
+    `scenarios=${JSON.stringify(d.scenarios)}`, `model-scenarios=${JSON.stringify(d.modelScenarios)}`, `author-labels=${JSON.stringify(d.authorLabels)}`, `skipped=${JSON.stringify(d.skipped)}`, `marker=${d.marker}`, `reason=${d.reason.replace(/\s+/g, ' ')}`,
   ];
   if (env.GITHUB_OUTPUT) appendFileSync(env.GITHUB_OUTPUT, `${out.join('\n')}\n`);
   if (d.go && env.MARKER_DIR) {

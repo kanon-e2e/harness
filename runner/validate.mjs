@@ -22,7 +22,7 @@ import { lstatSync, readdirSync, readFileSync } from 'node:fs';
 import { basename, join, relative } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-import { DEADLINE, bool, checkArgs, int, str, strs } from './lib/args.mjs';
+import { BRANCH, DEADLINE, bool, checkArgs, int, map, str, strs } from './lib/args.mjs';
 import { VOCABULARY } from './vocabulary.mjs';
 
 /** At most three phases, each a `kanon` job and then an `act` job (§5.2). */
@@ -42,7 +42,14 @@ export const SCENARIO_FIELDS = Object.freeze({
   apps: strs({ required: true, items: { enum: ['author', 'judge', 'releaser'] } }),
   claude: str({ required: true, enum: ['none', 'subscription'] }),
   deadlineMinutes: int({ required: true, min: 1, max: 120 }),
+  // Optional (E10): after phase 1, the test Author applies `label` to the open pull request from
+  // `head`, in a job of its own (`author-label`, docs/jobs.md), as an adopter's Implementer labels
+  // its own pull request. Only a real-model scenario takes it.
+  authorLabel: map(),
 });
+
+/** A label the Author may apply. */
+export const AUTHOR_LABEL = /^[a-z0-9][a-z0-9:_.-]{0,49}$/;
 
 const isObject = (/** @type {unknown} */ v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 
@@ -55,6 +62,15 @@ export function validateScenarioJson(s, dirName) {
   const o = /** @type {Record<string, unknown>} */ (s);
   const p = checkArgs(SCENARIO_FIELDS, o, '', (k) => `\`${k}\` is not a field of scenario.json (Kanon plan 0012 §4.1)`);
   if (typeof o.id === 'string' && o.id !== dirName) p.push(`\`id\` \`${o.id}\` must be the directory's name, \`${dirName}\``);
+  if (isObject(o.authorLabel)) {
+    const a = /** @type {Record<string, unknown>} */ (o.authorLabel);
+    const keys = Object.keys(a).sort();
+    if (keys.join() !== 'head,label') p.push('`authorLabel` holds exactly `head` and `label`');
+    if (typeof a.head === 'string' && !BRANCH.test(a.head)) p.push(`\`authorLabel.head\` \`${a.head}\` is not a branch`);
+    if (typeof a.label === 'string' && !AUTHOR_LABEL.test(a.label)) p.push(`\`authorLabel.label\` \`${a.label}\` must match ${AUTHOR_LABEL}`);
+    if (!(Array.isArray(o.apps) && o.apps.includes('author'))) p.push('`authorLabel` has the Author apply the label, and `apps` doesn\'t list `author`');
+    if (o.claude !== 'subscription') p.push('`authorLabel` is for a real-model scenario (`claude: subscription`): only a model lane needs an admitted identity to start it');
+  }
   return p;
 }
 
@@ -221,6 +237,12 @@ export function validateScenarioDir(dir) {
   else {
     p.push(...validateSteps(steps.value, { scenarioDir: dir }).map((e) => `steps.json: ${e}`));
     const verbs = JSON.stringify(steps.value);
+    const label = scenario.value?.authorLabel;
+    if (label && typeof label === 'object' && Array.isArray(steps.value?.phases)) {
+      const opens = (steps.value.phases[0]?.act ?? []).some((/** @type {any} */ s) => s?.verb === 'pr.open' && s.head === label.head);
+      if (!opens) p.push(`steps.json: \`authorLabel\` labels the pull request from \`${label.head}\` after phase 1, and phase 1's \`act\` segment opens none from it`);
+      if (steps.value.phases.length < 2) p.push('steps.json: `authorLabel` runs between phase 1 and phase 2, so the scenario needs a phase 2 to see what the label started');
+    }
     if (verbs.includes('"register.write"') && Array.isArray(scenario.value?.apps) && scenario.value.apps.length === 0) {
       p.push('steps.json: `register.write` writes the rows of the scenario\'s test Apps, and scenario.json\'s `apps` names none');
     }
