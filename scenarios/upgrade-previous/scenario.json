@@ -2,7 +2,7 @@
   "id": "upgrade-previous",
   "family": "upgrade",
   "tier": "none",
-  "gate": false,
+  "gate": true,
   "apps": ["author", "judge"],
   "claude": "none",
   "deadlineMinutes": 90
