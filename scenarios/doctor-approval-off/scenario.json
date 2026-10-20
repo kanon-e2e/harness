@@ -1,0 +1,11 @@
+{
+  "id": "doctor-approval-off",
+  "family": "doctor",
+  "tier": "none",
+  "gate": false,
+  "apps": [
+    "judge"
+  ],
+  "claude": "none",
+  "deadlineMinutes": 60
+}

@@ -1,0 +1,19 @@
+# The break this scenario makes on purpose (Kanon plan 0012 step E12): a job of the adopter's
+# own that holds `id-token: write`, which the adoption record doesn't accept under `## Choices`.
+# On the default branch it could assume any cloud role that trusts the branch's ref, so doctor
+# blocks on it (`id-token.unaccepted`). It runs only when dispatched, and the scenario never
+# dispatches it.
+name: Publish
+
+on: workflow_dispatch
+
+permissions: {}
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - run: echo "Nothing to publish."
