@@ -1,0 +1,23 @@
+# The deploy lane's smoke hook, the deploy rehearsal's: it passes. The gate refuses the release
+# before it runs.
+name: Deploy lane smoke hook
+description: Checks the deployed system answers as the release expects.
+inputs:
+  environment:
+    description: Passed by Kanon's deploy lane (docs/lanes.md).
+    default: ""
+  release:
+    description: Passed by Kanon's deploy lane (docs/lanes.md).
+    default: ""
+  role:
+    description: Passed by Kanon's deploy lane (docs/lanes.md).
+    default: ""
+runs:
+  using: composite
+  steps:
+    - name: Smoke
+      shell: bash
+      env:
+        RELEASE: ${{ inputs.release }}
+        ENVIRONMENT: ${{ inputs.environment }}
+      run: echo "Smoke passed for $ENVIRONMENT at $RELEASE"

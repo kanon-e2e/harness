@@ -1,0 +1,39 @@
+{
+  "phases": [
+    {
+      "kanon": [
+        { "verb": "kanon.init", "flags": ["--feature=review", "--review-trigger=labelled", "--no-sensitive-data"] },
+        { "verb": "register.write" },
+        { "verb": "expect.init", "status": "steps-left", "findings": ["label.create", "milestone.buckets", "ruleset.first-commit"], "fields": [{ "pointer": "/pin", "equals": "{{release}}" }] }
+      ],
+      "act": [
+        { "verb": "files.commit", "from": "kanon", "message": "Install Kanon's review feature" },
+        { "verb": "bootstrap.end", "move": "record" },
+        { "verb": "repo.apply", "firstCommit": true },
+        { "verb": "workflow.dispatch", "workflow": "apps-check.yml" },
+        { "verb": "run.await", "name": "apps-check", "workflow": "apps-check.yml", "event": "workflow_dispatch", "branch": "main", "deadline": 10 },
+        { "verb": "expect.run", "run": "apps-check", "conclusion": "success", "jobs": [{ "name": "apps / Judge", "conclusion": "success" }], "deadline": 2 },
+        { "verb": "run.await", "name": "ci", "workflow": "ci.yml", "event": "push", "branch": "main", "deadline": 10 },
+        { "verb": "expect.check", "branch": "main", "name": "Lane check", "conclusion": "success", "deadline": 5 },
+        { "verb": "repo.apply", "firstCommit": true },
+        { "verb": "bootstrap.end", "move": "approval" }
+      ]
+    },
+    {
+      "kanon": [],
+      "act": [
+        { "verb": "files.commit", "from": "scenario", "dir": "change", "branch": "docs-note", "message": "docs: add a note" },
+        { "verb": "pr.open", "name": "note", "head": "docs-note", "title": "docs: add a note", "body": "A gate refusal: this pull request is labelled review:please by an App outside the App register, and the review lane must start nothing." },
+        { "verb": "pr.label", "pr": "note", "add": ["review:please"] },
+        { "verb": "expect.api", "path": "repos/{{repository}}/actions/workflows/agent-review.yml/runs?event=pull_request_target&branch=docs-note", "pointer": "/total_count", "equals": 2, "deadline": 5 },
+        { "verb": "run.await", "name": "review-label", "workflow": "agent-review.yml", "event": "pull_request_target", "pr": "note", "deadline": 10 },
+        { "verb": "expect.run", "run": "review-label", "conclusion": "success", "deadline": 2, "jobs": [
+          { "name": "review / filter", "conclusion": "success" },
+          { "name": "review / notify-unlabeled", "conclusion": "skipped" },
+          { "name": "review / review", "conclusion": "skipped" }
+        ] },
+        { "verb": "expect.pr", "pr": "note", "state": "open", "labels": ["review:please"], "deadline": 2 }
+      ]
+    }
+  ]
+}
