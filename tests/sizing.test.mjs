@@ -31,17 +31,18 @@ describe('max-parallel, from the jobs-at-once setting (E0\'s item 5)', () => {
 
 describe('the longest running time, waves included (§5.2)', () => {
   it('is §5.2\'s 3 hours 20 minutes when every scenario runs at once, and the two gates\' 10 (#62)', () => {
-    expect(longestRunningMinutes(2)).toBe(10 + 10 + 3 * (25 + 35) + 2 * 5);
-    expect(longestRunningMinutes(2)).toBe(210);
+    expect(longestRunningMinutes(2)).toBe(10 + 10 + 10 + 3 * (25 + 35) + 2 * 5);
+    expect(longestRunningMinutes(2)).toBe(220);
     // §5.2 counts its 200 as three 50-minute phases plus 50 minutes of provision, the model-key
     // pair and the six phase mints. The gates before phases 2 and 3 run once each, not in waves.
+    // The Author's label pair (E10) adds its 10, in the real-model scenarios' waves.
     const m = stageMinutes();
-    expect(m).toEqual({ provision: 10, modelKey: 10, kanon: 25, act: 35, gate: 5 });
+    expect(m).toEqual({ provision: 10, modelKey: 10, authorLabel: 10, kanon: 25, act: 35, gate: 5 });
   });
 
   it('grows with the waves a lower max-parallel makes', () => {
-    expect(longestRunningMinutes(3)).toBe(2 * 10 + 10 + 3 * 2 * 60 + 2 * 5);
-    expect(longestRunningMinutes(14)).toBe(7 * 10 + 10 + 3 * 7 * 60 + 2 * 5);
+    expect(longestRunningMinutes(3)).toBe(2 * 10 + 10 + 10 + 3 * 2 * 60 + 2 * 5);
+    expect(longestRunningMinutes(14)).toBe(7 * 10 + 10 + 10 + 3 * 7 * 60 + 2 * 5);
     expect(longestRunningMinutes(0)).toBe(0);
   });
 });
@@ -68,7 +69,7 @@ describe('the janitor\'s cut-offs (§5.3)', () => {
     expect(cutoffMinutes).toBeGreaterThanOrEqual(longestRunningMinutes(maxScenarios()) + SETTINGS.queueMarginMinutes);
     expect(SETTINGS.queueMarginMinutes).toBe(100);
     expect(failedCutoffMinutes).toBeGreaterThanOrEqual(cutoffMinutes + 24 * 60);
-    expect({ cutoffMinutes, failedCutoffMinutes }).toEqual({ cutoffMinutes: 1450, failedCutoffMinutes: 2890 });
+    expect({ cutoffMinutes, failedCutoffMinutes }).toEqual({ cutoffMinutes: 1460, failedCutoffMinutes: 2900 });
   });
 
   it('follows the setting, not a constant: 20 jobs at once gives §5.2\'s full-parallelism figures', () => {
@@ -80,8 +81,8 @@ describe('the janitor\'s cut-offs (§5.3)', () => {
 
   it('sizing() reports every value the docs quote', () => {
     expect(sizing()).toEqual({
-      jobsAtOnce: 6, maxParallel: 2, maxScenarios: 14, longestRunningMinutes: 1350,
-      nightlyIntervalMinutes: 1440, cutoffMinutes: 1450, failedCutoffMinutes: 2890,
+      jobsAtOnce: 6, maxParallel: 2, maxScenarios: 14, longestRunningMinutes: 1360,
+      nightlyIntervalMinutes: 1440, cutoffMinutes: 1460, failedCutoffMinutes: 2900,
     });
   });
 });

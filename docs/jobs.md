@@ -6,14 +6,15 @@ What `e2e.yml` and the weekly upgrade signal (`upgrade-signal.yml`) run, which j
 
 | Job | Environment | Holds | Does |
 |---|---|---|---|
-| `plan` | none | the workflow's own token, read-only (`actions`, `contents`) | Decides whether the run goes ahead, and with which release and scenarios (`runner/plan.mjs`). Records the run's marker artifact. Creates nothing. |
+| `plan` | none | the workflow's own token, read-only (`actions`, `contents`) | Decides whether the run goes ahead, and with which release and scenarios (`runner/plan.mjs`). Asks the real-model ledger which `claude: subscription` scenarios may start ([below](#the-real-model-ledger)), and outputs those it refused for their cost as `skipped`. Records the run's marker artifact. Creates nothing. |
 | `start` | `e2e-report` | the Reporter's key | A candidate's run only: creates the `kanon-e2e` check run on the candidate's commit, `in_progress`, with `external_id` `<run id>-<run attempt>` and `details_url` the run's page. Its name records the candidate: `start (the Reporter's check run: <tag> at <40-hex sha>)`. |
 | `provision` | `e2e` | the driver's key; the test Apps' ids and keys | For each scenario: creates the public repository `e2e-<scenario>-<run>-<attempt>`, empty, with the `kanon-e2e` topic; writes the Apps the scenario lists as `<APP>_APP_ID` and `<APP>_APP_PRIVATE_KEY`; sets the merge settings the release under test's merge-settings guard checks (`K-ADOPT-1` step 5), read from its `release.yml`, before anything reaches the default branch; adds `kanon-e2e-provisioned`. |
-| `model-key` | `e2e` (`mint`), `e2e-model` (the job) | the driver's key (`mint`); the real-model token (the job) | For each `claude: subscription` scenario: writes `CLAUDE_CODE_OAUTH_TOKEN` into its repository. |
+| `model-key` | `e2e` (`mint`), `e2e-model` (the job) | the driver's key (`mint`); the real-model token (the job) | For each `claude: subscription` scenario the ledger admitted, `plan`'s `model-scenarios`: writes `CLAUDE_CODE_OAUTH_TOKEN` into its repository. A refused scenario has no repository and gets no token. |
+| `author-label` | `e2e` (`mint`) | the Author's key (`mint`); the Author's label token (the job) | After `act-1`, for each planned scenario whose `scenario.json` names an `authorLabel` (`plan`'s `author-labels`): applies the label to the open pull request from its branch, with `gh` alone, as the test Author. A model lane's gate admits the Author, a member of the scenario's App register, and never the driver (K-AGENT-45). It labels nothing, and says so, when the repository is archived or no such pull request is open. `gate-2` waits for it. |
 | `kanon-1` … `kanon-3` | `e2e` (`mint`) | the driver's key (`mint`); a read-only token (the job) | Phase *n*'s `kanon` segment: Kanon's code at the release under test, in a clone. |
 | `act-1` … `act-3` | `e2e` (`mint`) | the driver's key (`mint`); the act token (the job) | Phase *n*'s `act` segment: the harness's code, pushing what Kanon wrote and doing the rest. The job that learns the result ends the repository. |
 | `gate-2`, `gate-3` | none | the workflow's own token, `contents: read`; no key | Before phase *n*'s `kanon` job: decides the scenarios phase *n* runs (`runner/gate.mjs`, #62). It drops a scenario with fewer than *n* phases, and one whose `kanon-e2e-result-<scenario>` names this attempt's repository, because an earlier phase ended it and its repository was deleted or archived. Phase *n*'s `kanon` and `act` jobs take their matrix from it, and are skipped when it keeps none, so no mint is scoped to a repository that may be gone. It never fails for what it drops. |
-| `verdict` | none | the workflow's own token, `contents: read` and `issues: write` on this repository; no key | Reads each scenario's `kanon-e2e-result/v1` and writes `verdict.json` (`kanon-e2e-verdict/v1`), and hands `report` the verdict and the red issue as its job outputs: `pass`, `fail` or `infra-only`, over the scenarios with `gate: true` on a candidate's run and over every planned scenario elsewhere (`runner/verdict.mjs`). On a candidate's run only, files, edits or closes the candidate's red issue and the `the Reporter can't post` issue. Red unless `pass`. |
+| `verdict` | none | the workflow's own token, `contents: read` and `issues: write` on this repository; no key | Reads each scenario's `kanon-e2e-result/v1`, and `plan`'s `skipped` as those scenarios' results, and writes `verdict.json` (`kanon-e2e-verdict/v1`), and hands `report` the verdict and the red issue as its job outputs: `pass`, `fail` or `infra-only`, over the scenarios with `gate: true` on a candidate's run and over every planned scenario elsewhere (`runner/verdict.mjs`). On a candidate's run only, files, edits or closes the candidate's red issue and the `the Reporter can't post` issue. Red unless `pass`. |
 | `report` | `e2e-report` | the Reporter's key | Whenever `start` created a check run: completes it from `verdict`'s job outputs, never from an artifact, `success` for `pass`, `failure` for `fail`, `neutral` for anything else, retrying a failed call twice. Its summary links this run and, when there is one, the candidate's red issue. |
 
 **The pairs.** Every job that runs code beside a token minted from the driver's key is a pair, the spine Kanon's own lanes use (Kanon's `overseer-run.yml`, `K-AGENT-49`). A `-run` workflow holds a `mint` job, in `e2e`, that holds the key and runs only the token action. It mints with `skip-token-revoke` and hands the token on hex-encoded. Its `-job` workflow is one job, handed only the token as a secret: `Receive the App token` comes first, refusing a token minted for an earlier attempt, and `Revoke the App token` comes last, always. A called workflow sees an environment's secret only when it declares it under `on.workflow_call.secrets` and its caller maps it by name (Kanon #1049, item 12), so each `-run` declares the driver's id and key, and `e2e.yml` maps them.
@@ -23,7 +24,10 @@ What `e2e.yml` and the weekly upgrade signal (`upgrade-signal.yml`) run, which j
 | `e2e-kanon-run.yml` → `e2e-kanon-job.yml` | the one scenario repository; Contents, Issues, Pull requests, Actions, Administration **read**; no Workflows, no Secrets |
 | `e2e-act-run.yml` → `e2e-act-job.yml` | the one scenario repository; Contents, Workflows, Issues, Pull requests, Actions, Administration write; Secrets, Checks read |
 | `e2e-model-key-run.yml` → `e2e-model-key-job.yml` | the one scenario repository; Secrets write |
+| `e2e-author-label-run.yml` → `e2e-author-label-job.yml` | minted from the **Author's** key, not the driver's: the one scenario repository; Issues and Pull requests write. The job is three steps, receive, `gh` applies the label, revoke, with no checkout, no harness code and no Kanon code (K-AGENT-50) |
 | `e2e-janitor-run.yml` → `e2e-janitor-job.yml` | the whole test organisation; Administration write |
+
+**A change to plan 0012 §5.2 and §11** (the Owner, 2026-10-20, for E10). The plan has the test Apps' keys read only by `provision`, which writes them as each scenario repository's secrets. Now `e2e-author-label-run.yml`'s `mint` reads the Author's key too, in `e2e`, to mint a token for one repository with Issues and Pull requests write. A leak of that token can label, comment on and edit issues and pull requests in one throwaway repository for its hour, as the Author, which that repository's lanes admit as their Implementer: it can start a model lane there, on the subscription token the repository holds. It can push nothing and change no workflow or secret. The job that holds it runs only `gh`, on inputs from `plan`, which reads the catalogue at `main`.
 
 ## The kanon/act split (decision 23 (b))
 
@@ -47,9 +51,28 @@ What `e2e.yml` and the weekly upgrade signal (`upgrade-signal.yml`) run, which j
 | `pass` | The last phase's `act` segment ran every step. | Deleted. |
 | `fail` | An expectation was false, a step's or the scenario's deadline passed, the artifact was refused, or the harness's own code went wrong. | Kept 24 hours, topic `kanon-e2e-failed`, then archived (decision 13). |
 | `infra` | GitHub failed past the retries, a token expired, the repository wasn't provisioned or is gone, or the state didn't arrive. | Deleted. |
-| `skipped` | The runner refused to start the scenario, and says why in the result's `skipped` field, a short word: `budget` when the real-model ledger (E10) found it could pass the run's $2. Nothing writes it yet. `verdict` reads a counted `skipped` as `fail`, and a `skipped` with no such word as missing. | — |
+| `skipped` | The runner refused to start the scenario, and says why in the result's `skipped` field, a short word: `budget` when the real-model ledger (E10) found it could pass the run's $2. `plan` refuses it before any repository exists and hands it to `verdict` in its `skipped` output, which `verdict` reads as the scenario's result, over any artifact claiming another. `verdict` reads a counted `skipped` as `fail`, and a `skipped` with no such word as missing. | — |
 
 A call to GitHub, by `gh` or by `git`'s clone, fetch, push and ls-remote, that fails on a 5xx, a rate limit or a network error is retried three times, after 2, 4 and 8 seconds, or a minute on a rate limit. A false expectation is never retried: it is the finding. The result is set once, and a later phase can't change it. The `act` job that learns the result ends the repository and uploads `kanon-e2e-result-<scenario>`. The janitor deletes what a dead run left.
+
+## The real-model ledger
+
+`runner/ledger.mjs` holds the real-model tier's $2 a run softly ([Kanon plan 0012](https://github.com/yedeya-labs/kanon/blob/main/docs/plans/0012-end-to-end-tests.md) §6.2, decision 7 as changed; step E10). `plan` asks it, before any repository is created, about each `claude: subscription` scenario the run would hold, in catalogue order:
+
+| The scenario | The poll, the nightly | A dispatch |
+|---|---|---|
+| Has recorded costs, and its expected cost fits | started | started |
+| Has recorded costs, and its expected cost would pass the $2 | `skipped: budget` | `skipped: budget` |
+| Has no recorded cost | not started, with the reason in `plan`'s summary | started only when it is the run's one real-model scenario; otherwise not started |
+| Would be the third real-model scenario (decision 15) | not started | not started |
+
+- **Its expected cost** is the largest cost its last ten recorded runs reported, times 1.5. **A recorded cost** is a result's `costUsd`: the `kanon-e2e-result-<scenario>` artifacts of `e2e.yml`'s runs on `main`, unexpired, newest first. `expect.row` keeps it from the lane's telemetry row, the run's `total_cost_usd`: Claude Code's own reckoning, priced at list, not a bill on the subscription token (Kanon #968, item 8). It keeps it before comparing it with the lane's ceiling, so a run that went past is still history. A scenario that ended before its row was read records no cost.
+- **What the run has already spent.** The admitted scenarios run at once, so at `plan` it is the sum of their expected costs. A scenario is refused when its expected cost would take that sum past `capUsd`.
+- **A scenario with no recorded cost** runs only on a dispatch, the Owner's, with no other real-model scenario against the cap. The poll and the nightly leave it out and say why. That is no result, so it doesn't turn the run red: the Owner's first dispatch of it is what's missing, not a fix.
+- **It is soft.** A run that goes past its own history can spend up to its lane's ceiling ($30 for the Reviewer) before the ledger sees it. The lane's `--max-budget-usd` bounds each run, and the subscription's usage limits bound the month.
+- **What it trusts** (#24). Code in a `kanon` job can upload a `kanon-e2e-result-<scenario>` artifact under any name in its run, a low `costUsd` included, and the ledger would expect less next time. The lane's own ceiling still bounds each run.
+
+`runner/settings.json`'s `ledger` holds the cap, the margin and the ten runs; `maxModelScenarios` holds decision 15's two. `tests/ledger.test.mjs` holds the rules, and names the two tests E10's mutation turns red: the ledger without its margin, and a scenario with no history started by the schedule.
 
 ## The sizing
 
@@ -66,9 +89,9 @@ A call to GitHub, by `gh` or by `git`'s clone, fetch, push and ls-remote, that f
 
 **One run at a time** (the Owner, 2026-10-17). So a run is sized against the organisation's limits alone, not shared with a second run. A job that `needs:` a matrix waits for all its entries. With 2 at once, each stage runs in waves of 2. A repository lives from its `provision` to the last wave of `act-3`. With *W* = ⌈*n* / 2⌉ waves and at most two real-model scenarios, its longest running time is
 
-*W* × 10 (provision) + ⌈min(*n*, 2) / 2⌉ × 10 (model key) + 3 × *W* × (25 + 35) (each phase's `kanon` and `act` pairs, mint included) + 2 × 5 (`gate-2` and `gate-3`, one job each, not in waves).
+*W* × 10 (provision) + ⌈min(*n*, 2) / 2⌉ × (10 (model key) + 10 (the Author's label, E10)) + 3 × *W* × (25 + 35) (each phase's `kanon` and `act` pairs, mint included) + 2 × 5 (`gate-2` and `gate-3`, one job each, not in waves).
 
-The **catalogue's cap** is the largest *n* whose longest running time fits the nightly interval and whose 2*n* repositories (each scenario, and its re-run) fit the hour's 80. That is **14 scenarios**. 14 scenarios take **22 h 30 min**, so a run ends inside the 24 hours before the next nightly.
+The **catalogue's cap** is the largest *n* whose longest running time fits the nightly interval and whose 2*n* repositories (each scenario, and its re-run) fit the hour's 80. That is **14 scenarios**. 14 scenarios take **22 h 40 min**, so a run ends inside the 24 hours before the next nightly.
 
 **The cap holds what a run plans, not the catalogue** (the Owner, 2026-10-20; `fitCap` in `runner/plan.mjs`). The catalogue may hold more than 14.
 - **A nightly, a candidate's run, or a dispatch of the whole catalogue** plans every `gate: true` scenario first, then as many `gate: false` ones as fit under the cap.
@@ -76,7 +99,7 @@ The **catalogue's cap** is the largest *n* whose longest running time fits the n
 - **A dispatch of one scenario or a family** plans what it selects, and is refused only when that selection itself passes the cap.
 - **When the `gate: true` scenarios alone pass the cap,** `plan` fails, as no run could hold the gate. Then the limit must rise, or a scenario must leave the gate.
 
-**The janitor's cut-offs** follow: the longest running time at the cap, plus 100 minutes' margin for queueing, is **24 h 10 min**. A repository with `kanon-e2e-failed` gets 24 hours more, **48 h 10 min**. It runs hourly (`e2e-janitor.yml`). It deletes only repositories with the `kanon-e2e` topic, never the harness. Its run fails, by name, on a repository older than a day that it couldn't delete.
+**The janitor's cut-offs** follow: the longest running time at the cap, plus 100 minutes' margin for queueing, is **24 h 20 min**. A repository with `kanon-e2e-failed` gets 24 hours more, **48 h 20 min**. It runs hourly (`e2e-janitor.yml`). It deletes only repositories with the `kanon-e2e` topic, never the harness. Its run fails, by name, on a repository older than a day that it couldn't delete.
 
 Change a setting and the tests name each place that must follow: the max-parallel on each matrix, each job's `timeout-minutes`, and the cut-offs.
 

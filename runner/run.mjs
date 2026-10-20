@@ -288,6 +288,8 @@ export async function runSegment(a, deps) {
     schema: RESULT_SCHEMA, scenario: scenario.id, release: a.release, trigger: a.trigger, run: a.run,
     repository: a.repository, startedAt: iso(state.startedAt), finishedAt: iso(deps.now()),
     result: state.result, firstFailure: state.firstFailure, steps: state.steps, repositoryAction,
+    // The real-model cost `expect.row` kept, read by the ledger as this scenario's history (E10).
+    ...(typeof state.costUsd === 'number' ? { costUsd: state.costUsd } : {}),
   };
   log(`The scenario reads ${result.result}; its repository was ${repositoryAction}.`);
   return { state, result };

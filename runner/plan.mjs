@@ -25,6 +25,12 @@
 // of a scenario or a family plans what it selects, and is refused only when that selection passes
 // the cap. When the gating scenarios alone pass the cap, `plan` fails, as no run could gate.
 //
+// THE REAL-MODEL LEDGER (§6.2, E10; runner/ledger.mjs): each `claude: subscription` scenario the
+// run would hold is admitted or refused before any repository is created. One refused for its
+// expected cost is left out of the matrix and handed to `verdict` as `skipped: budget`; one with
+// no recorded cost runs only on a dispatch, alone, and is otherwise left out, with the reason in
+// the summary. A refused scenario gets no repository and no model token.
+//
 //   node runner/plan.mjs   (reads EVENT, SCHEDULE, RELEASE, SELECT, GITHUB_RUN_ID, GH_TOKEN;
 //                           writes GITHUB_OUTPUT, the step summary and MARKER_DIR/marker.json)
 
@@ -34,6 +40,7 @@ import { pathToFileURL } from 'node:url';
 
 import { api } from './lib/gh.mjs';
 import { RELEASE } from './lib/kanon.mjs';
+import { admit, isModel, recordedCosts } from './ledger.mjs';
 import { ghProcess } from './lib/proc.mjs';
 import { maxScenarios, SETTINGS } from './sizing.mjs';
 import { loadScenario, scenarioDirs } from './validate.mjs';
@@ -84,12 +91,15 @@ export function fitCap(catalogue, cap, day) {
 const entry = (s) => ({ id: s.id, apps: s.apps, claude: s.claude, gate: s.gate === true });
 
 /**
- * `left` is the `gate: false` scenarios the cap left out of this run, by id.
- * @typedef {{ go: boolean, trigger: string, release: string, candidateSha: string, scenarios: any[], modelScenarios: any[], left: string[], marker: string, reason: string }} Decision
+ * `authorLabels` is the planned scenarios whose `authorLabel` the `author-label` job applies after
+ * phase 1, for its matrix. `left` is the `gate: false` scenarios the cap left out of this run, by
+ * id; `skipped` is the scenarios the ledger refused for their cost, each with its `skipped` word, for `verdict`;
+ * `ledger` is every real-model scenario's admission or refusal, with its reason.
+ * @typedef {{ go: boolean, trigger: string, release: string, candidateSha: string, scenarios: any[], modelScenarios: any[], authorLabels: Array<{ id: string, head: string, label: string }>, left: string[], skipped: any[], ledger: Array<{ id: string, started: boolean, reason: string }>, marker: string, reason: string }} Decision
  */
 
-/** A run that doesn't go ahead. @param {string} trigger @param {string} reason @returns {Decision} */
-const stop = (trigger, reason) => ({ go: false, trigger, release: '', candidateSha: '', scenarios: [], modelScenarios: [], left: [], marker: '', reason });
+/** A run that doesn't go ahead. @param {string} trigger @param {string} reason @param {Decision['ledger']} [ledger] @returns {Decision} */
+const stop = (trigger, reason, ledger = []) => ({ go: false, trigger, release: '', candidateSha: '', scenarios: [], modelScenarios: [], authorLabels: [], left: [], skipped: [], ledger, marker: '', reason });
 
 /**
  * Decides the run.
@@ -114,9 +124,6 @@ export async function decide(input, deps) {
       chosen = input.catalogue.filter((s) => s.id === input.select || s.family === input.select);
       if (!chosen.length) throw new Error(`\`${input.select}\` names no scenario and no family of the catalogue`);
     }
-  } else {
-    // A scheduled run holds no real-model scenario until E10 decides how they are scheduled.
-    chosen = input.catalogue.filter((s) => s.tier !== 'model');
   }
   // THE CAP, on what this run plans.
   /** @type {string[]} */
@@ -154,10 +161,24 @@ export async function decide(input, deps) {
     return pages.flatMap((/** @type {any} */ p) => p.artifacts ?? []);
   };
   const sha = async (/** @type {string} */ ref) => String((await api(ctx, `${K}/commits/${ref}`)).sha);
-  const go = (/** @type {Partial<Decision>} */ d) => {
-    const scenarios = chosen.map(entry);
+  // THE LEDGER, last, once the run is going ahead: it reads the real-model scenarios' history.
+  const go = async (/** @type {Partial<Decision>} */ d) => {
+    const models = chosen.filter(isModel);
+    /** @type {Record<string, number[]>} */
+    const history = {};
+    for (const m of models) history[m.id] = await recordedCosts(ctx, m.id);
+    const { admitted, refused } = admit({ kind, models: models.map(entry), history });
+    const refusedIds = new Set(refused.map((r) => r.id));
+    const ledger = [...admitted.map((a) => ({ id: a.id, started: true, reason: a.reason })), ...refused.map((r) => ({ id: r.id, started: false, reason: r.reason }))];
+    const scenarios = chosen.filter((s) => !refusedIds.has(s.id)).map(entry);
+    if (!scenarios.length) return stop(d.trigger ?? trigger, `every scenario selected was refused by the real-model ledger: ${refused.map((r) => `${r.id} (${r.reason})`).join('; ')}`, ledger);
     const note = left.length ? `; the cap of ${cap} leaves out, this time: ${left.join(', ')}` : '';
-    return /** @type {Decision} */ ({ go: true, trigger, candidateSha: '', scenarios, modelScenarios: scenarios.filter((s) => s.claude === 'subscription'), left, ...d, reason: `${d.reason ?? ''}${note}` });
+    return /** @type {Decision} */ ({
+      go: true, trigger, candidateSha: '', ...d, reason: `${d.reason ?? ''}${note}`, scenarios, ledger, left,
+      modelScenarios: scenarios.filter(isModel),
+      authorLabels: chosen.filter((s) => !refusedIds.has(s.id) && s.authorLabel).map((s) => ({ id: s.id, head: s.authorLabel.head, label: s.authorLabel.label })),
+      skipped: refused.filter((r) => r.skipped).map((r) => ({ id: r.id, gate: r.gate, skipped: r.skipped })),
+    });
   };
 
   if (kind === 'dispatch') {
@@ -210,7 +231,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   }, { gh: ghProcess(env), now: Date.now });
   const out = [
     `go=${d.go}`, `trigger=${d.trigger}`, `release=${d.release}`, `candidate-sha=${d.candidateSha}`,
-    `scenarios=${JSON.stringify(d.scenarios)}`, `model-scenarios=${JSON.stringify(d.modelScenarios)}`, `marker=${d.marker}`, `reason=${d.reason.replace(/\s+/g, ' ')}`,
+    `scenarios=${JSON.stringify(d.scenarios)}`, `model-scenarios=${JSON.stringify(d.modelScenarios)}`, `author-labels=${JSON.stringify(d.authorLabels)}`, `skipped=${JSON.stringify(d.skipped)}`, `marker=${d.marker}`, `reason=${d.reason.replace(/\s+/g, ' ')}`,
   ];
   if (env.GITHUB_OUTPUT) appendFileSync(env.GITHUB_OUTPUT, `${out.join('\n')}\n`);
   if (d.go && env.MARKER_DIR) {
@@ -218,7 +239,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     writeFileSync(join(env.MARKER_DIR, 'marker.json'), `${JSON.stringify({ marker: d.marker, trigger: d.trigger, release: d.release, candidateSha: d.candidateSha, scenarios: d.scenarios.map((s) => s.id) }, null, 2)}\n`);
   }
   if (env.GITHUB_STEP_SUMMARY) {
-    appendFileSync(env.GITHUB_STEP_SUMMARY, `## plan\n\n${d.go ? `**Goes ahead**: ${d.trigger} run of ${d.release}, ${d.scenarios.length} scenario(s): ${d.scenarios.map((s) => `\`${s.id}\``).join(', ')}.` : '**Stops here**; no repository is created.'}\n\n${d.reason}\n`);
+    const ledger = d.ledger.length ? `\n### The real-model ledger ($${SETTINGS.ledger.capUsd} a run)\n\n${d.ledger.map((l) => `- \`${l.id}\`: ${l.reason}`).join('\n')}\n` : '';
+    appendFileSync(env.GITHUB_STEP_SUMMARY, `## plan\n\n${d.go ? `**Goes ahead**: ${d.trigger} run of ${d.release}, ${d.scenarios.length} scenario(s): ${d.scenarios.map((s) => `\`${s.id}\``).join(', ')}.` : '**Stops here**; no repository is created.'}\n\n${d.reason}\n${ledger}`);
   }
   console.log(JSON.stringify(d, null, 2));
 }

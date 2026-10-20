@@ -59,7 +59,7 @@ The repository is deleted when the scenario passes. When it fails, it is archive
 - **Minutes:** the scenario repository and the harness are both public, so their runs cost nothing (probe 6).
 - **People:** none.
 
-Dispatch it on its own, or the family with `select=lane`:
+Dispatch it on its own. `select=lane` names the whole `lane` family, which also holds `refuse-review-label` and the real-model `review-real`, so it would spend the Owner's subscription too:
 
 ```sh
 gh workflow run e2e.yml -R kanon-e2e/harness -f release=<candidate> -f select=lane-check-inexact-pin

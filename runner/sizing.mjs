@@ -42,6 +42,7 @@ export const waves = (n, p) => Math.ceil(n / p);
 export const stageMinutes = (s = SETTINGS) => ({
   provision: s.minutes.provision,
   modelKey: s.minutes.mint + s.minutes.modelKey,
+  authorLabel: s.minutes.mint + s.minutes.authorLabel,
   kanon: s.minutes.mint + s.minutes.kanon,
   act: s.minutes.mint + s.minutes.act,
   gate: s.minutes.gate,
@@ -59,7 +60,7 @@ export const longestRunningMinutes = (n, s = SETTINGS) => {
   const m = stageMinutes(s);
   const w = waves(n, p);
   const wm = waves(Math.min(n, s.maxModelScenarios), p);
-  return w * m.provision + wm * m.modelKey + PHASES * w * (m.kanon + m.act) + (PHASES - 1) * m.gate;
+  return w * m.provision + wm * (m.modelKey + m.authorLabel) + PHASES * w * (m.kanon + m.act) + (PHASES - 1) * m.gate;
 };
 
 /** The repositories one run of `n` scenarios creates: each, and its `infra` re-run. @param {number} n */

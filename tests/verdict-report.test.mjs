@@ -2,7 +2,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { give, judge, REPORTER_TITLE, redTitle } from '../runner/verdict.mjs';
+import { give, judge, REPORTER_TITLE, redTitle, withSkipped } from '../runner/verdict.mjs';
 import { describeCall, tempDir, writeTree } from './helpers/stubs.mjs';
 import { readWorkflows } from './helpers/workflows.mjs';
 
@@ -67,6 +67,17 @@ describe('verdict: the scenarios that count, and pass, fail or infra-only', () =
     expect(judge({ trigger: 'candidate', planned: [...gating('a'), ...free('m')], results: [result('a', 'pass'), skipped], startResult: 'success' })).toMatchObject({ verdict: 'pass', scenarios: [{}, { id: 'm', counts: false, result: 'skipped', skipped: 'budget' }] });
     // Every planned scenario counts off a candidate's run, so a skipped one fails there too.
     expect(judge({ trigger: 'nightly', planned: free('m'), results: [skipped], startResult: 'skipped' }).verdict).toBe('fail');
+  });
+
+  it('the ledger\'s refusals reach `verdict` from `plan`\'s `skipped` output: planned, `skipped: budget`, over any result claiming otherwise (E10)', () => {
+    const joined = withSkipped(gating('a'), [result('a', 'pass'), result('m', 'pass')], [{ id: 'm', gate: true, skipped: 'budget' }]);
+    expect(joined.planned).toEqual([{ id: 'a', gate: true }, { id: 'm', gate: true }]);
+    expect(judge({ trigger: 'candidate', ...joined, startResult: 'success' })).toMatchObject({
+      verdict: 'fail', scenarios: [{ id: 'a', result: 'pass' }, { id: 'm', gate: true, result: 'skipped', skipped: 'budget' }],
+    });
+    const free_ = withSkipped(gating('a'), [result('a', 'pass')], [{ id: 'm', gate: false, skipped: 'budget' }]);
+    expect(judge({ trigger: 'candidate', ...free_, startResult: 'success' })).toMatchObject({ verdict: 'pass', scenarios: [{}, { id: 'm', counts: false, result: 'skipped' }] });
+    expect(withSkipped(gating('a'), [result('a', 'pass')], [])).toEqual({ planned: gating('a'), results: [result('a', 'pass')] });
   });
 
   it('a `skipped` result says why in `skipped`, a short word; without one it is read as missing', () => {

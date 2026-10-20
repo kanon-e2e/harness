@@ -1,4 +1,7 @@
+import { writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { classify } from '../runner/lib/retry.mjs';
 import { VOCABULARY } from '../runner/vocabulary.mjs';
 import { REPO, RELEASE, context, inTurn, stubGh } from './helpers/stubs.mjs';
 
@@ -136,6 +139,36 @@ describe('run.await', () => {
     expect(ctx.state.runs).toEqual({ ci: 8 });
   });
 
+  it('with `actor`, keeps the run that App started, not a newer one another App started on the same head (harness #104)', async () => {
+    const LABEL = `GET repos/${REPO}/actions/workflows/agent-review.yml/runs?event=pull_request_target&head_sha=def&per_page=20`;
+    const by = (login, run) => ({ ...run, triggering_actor: { login }, actor: { login: 'someone-else' } });
+    const opened = by('kanon-e2e-driver[bot]', { id: 40, run_number: 1, status: 'completed', conclusion: 'skipped' });
+    const review = by('kanon-e2e-author[bot]', { id: 41, run_number: 2, status: 'in_progress' });
+    // The Reviewer labels the pull request mid-review: each label starts a run its filter skips in seconds.
+    const sev = by('kanon-e2e-judge[bot]', { id: 42, run_number: 3, status: 'completed', conclusion: 'skipped' });
+    const agent = by('kanon-e2e-judge[bot]', { id: 43, run_number: 4, status: 'completed', conclusion: 'skipped' });
+    const g = stubGh({
+      [`GET repos/${REPO}/pulls/5`]: { head: { sha: 'def' } },
+      [LABEL]: inTurn({ workflow_runs: [opened, review, sev] }, { workflow_runs: [agent, sev, { ...review, status: 'completed', conclusion: 'success' }, opened] }),
+    });
+    const ctx = context({ gh: g.gh, state: { prs: { note: 5 } } });
+    await run('run.await', { name: 'review', workflow: 'agent-review.yml', event: 'pull_request_target', pr: 'note', actor: 'author', deadline: 25 }, ctx);
+    expect(ctx.state.runs).toEqual({ review: 41 });
+    // With no `actor`, the newest of all, as before.
+    const g2 = stubGh({ [`GET repos/${REPO}/pulls/5`]: { head: { sha: 'def' } }, [LABEL]: { workflow_runs: [opened, { ...review, status: 'completed' }, agent] } });
+    const plain = context({ gh: g2.gh, state: { prs: { note: 5 } } });
+    await run('run.await', { name: 'review', workflow: 'agent-review.yml', event: 'pull_request_target', pr: 'note', deadline: 5 }, plain);
+    expect(plain.state.runs).toEqual({ review: 43 });
+  });
+
+  it('with `actor`, a run started only by others is not one: it waits, and says who started them; `actor` takes only a test App', async () => {
+    const LABEL = `GET repos/${REPO}/actions/workflows/agent-review.yml/runs?event=pull_request_target&head_sha=def&per_page=20`;
+    const g = stubGh({ [`GET repos/${REPO}/pulls/5`]: { head: { sha: 'def' } }, [LABEL]: { workflow_runs: [{ id: 9, run_number: 1, status: 'completed', triggering_actor: { login: 'kanon-e2e-driver[bot]' } }] } });
+    await expect(run('run.await', { workflow: 'agent-review.yml', event: 'pull_request_target', pr: 'note', actor: 'author', deadline: 1 }, context({ gh: g.gh, state: { prs: { note: 5 } } })))
+      .rejects.toMatchObject(failsWith(/started by kanon-e2e-author\[bot\] yet; 1 started by others: kanon-e2e-driver\[bot\]/));
+    expect(VOCABULARY['run.await'].args.actor.enum).toEqual(['author', 'judge', 'releaser']);
+  });
+
   it('fails when the deadline passes', async () => {
     const g = stubGh({ [`GET repos/${REPO}/branches/main`]: { commit: { sha: 'abc' } }, [RUNS]: { workflow_runs: [] } });
     await expect(run('run.await', { workflow: 'ci.yml', event: 'push', branch: 'main', deadline: 1 }, context({ gh: g.gh }))).rejects.toMatchObject(failsWith(/deadline.*no run/));
@@ -233,6 +266,77 @@ describe('expect.artifact', () => {
     const g = stubGh({ [`GET repos/${REPO}/actions/runs/5/artifacts?per_page=100`]: inTurn({ artifacts: [] }, { artifacts: [{ name: 'agent-run-row' }] }) });
     await run('expect.artifact', { run: 'ci', name: 'agent-run-row', deadline: 5 }, context({ gh: g.gh, state: { runs: { ci: 5 } } }));
     await expect(run('expect.artifact', { run: 'ci', name: 'other', deadline: 1 }, context({ gh: g.gh, state: { runs: { ci: 5 } } }))).rejects.toMatchObject(failsWith(/other.*agent-run-row/));
+  });
+});
+
+describe('expect.row', () => {
+  const ROW = { schema_version: 2, row_kind: 'run', lane: 'review', outcome: 'ok', reason: 'ok', verdict: 'approved', total_cost_usd: 0.42 };
+  /**
+   * `gh`, stubbed: the run's artifacts in turn, and `run download` writing `file` (text) into the
+   * directory it names, as `gh` does. The other calls go to stubGh.
+   */
+  const world = ({ names = [['kanon-telemetry-review-5-1']], row = ROW, file = JSON.stringify(row), download = 0 } = {}) => {
+    const g = stubGh({ [`GET repos/${REPO}/actions/runs/5/artifacts?per_page=100`]: inTurn(...names.map((n) => ({ artifacts: n.map((name) => ({ name })) }))) });
+    const downloads = [];
+    const gh = async (args, input) => {
+      if (args[0] !== 'run') return g.gh(args, input);
+      downloads.push(args.filter((a, i) => args[i - 1] !== '-D'));
+      if (download) return { status: download, stdout: '', stderr: 'HTTP 404: Not Found' };
+      writeFileSync(join(args[args.indexOf('-D') + 1], 'kanon-telemetry.json'), file);
+      return { status: 0, stdout: '', stderr: '' };
+    };
+    return { gh, downloads };
+  };
+  const step = { run: 'review', lane: 'review', ceilingUsd: 30, deadline: 5 };
+  const ctxOf = (w, state = {}) => context({ gh: w.gh, state: { runs: { review: 5 }, ...state } });
+
+  it('waits for the lane\'s row, downloads it as data, and keeps its cost in the state for the result', async () => {
+    const w = world({ names: [[], ['other'], ['kanon-telemetry-review-5-1', 'kanon-telemetry-review-5-2', 'kanon-telemetry-implement-5-1']] });
+    const ctx = ctxOf(w);
+    await run('expect.row', step, ctx);
+    expect(ctx.state.costUsd).toBe(0.42);
+    // The newest attempt's row, from the scenario repository.
+    expect(w.downloads).toEqual([['run', 'download', '5', '-R', REPO, '-n', 'kanon-telemetry-review-5-2', '-D']]);
+  });
+
+  it('adds a second row\'s cost to the first', async () => {
+    const ctx = ctxOf(world({ row: { ...ROW, total_cost_usd: 0.08 } }), { costUsd: 0.42 });
+    await run('expect.row', step, ctx);
+    expect(ctx.state.costUsd).toBe(0.5);
+  });
+
+  it('fails past the lane\'s ceiling, and still keeps the cost, so the ledger sees it', async () => {
+    const ctx = ctxOf(world({ row: { ...ROW, total_cost_usd: 31.5 } }));
+    await expect(run('expect.row', step, ctx)).rejects.toMatchObject(failsWith(/31\.5 is past the lane's ceiling of \$30/));
+    expect(ctx.state.costUsd).toBe(31.5);
+  });
+
+  it('reads `outcome: unavailable` as infra, retried and not failed: the model was never reached (§6.2)', async () => {
+    const ctx = ctxOf(world({ row: { ...ROW, outcome: 'unavailable', reason: 'model_never_ran', total_cost_usd: 0 } }));
+    const e = await run('expect.row', step, ctx).catch((x) => x);
+    expect(classify(e)).toBe('infra');
+    expect(e.message).toMatch(/never reached.*model_never_ran/);
+    expect(ctx.state.costUsd).toBeUndefined();
+  });
+
+  it('fails a row with no cost, of another lane or schema, or that isn\'t JSON', async () => {
+    for (const [w, re] of [
+      [world({ row: { ...ROW, total_cost_usd: undefined } }), /records no cost/],
+      [world({ row: { ...ROW, total_cost_usd: -1 } }), /records no cost/],
+      [world({ row: { ...ROW, lane: 'implement' } }), /`lane`: expected `review`/],
+      [world({ row: { ...ROW, schema_version: 1 } }), /not a version-2 run row/],
+      [world({ file: 'not json' }), /no kanon-telemetry\.json that parses/],
+      [world({ file: '[1]' }), /not a JSON object/],
+    ]) await expect(run('expect.row', step, ctxOf(w))).rejects.toMatchObject(failsWith(re));
+  });
+
+  it('fails at its deadline when the run uploads no row, naming what it has', async () => {
+    await expect(run('expect.row', { ...step, deadline: 1 }, ctxOf(world({ names: [['reviewer-transcript-pr1-1']] })))).rejects.toMatchObject(failsWith(/no telemetry row.*reviewer-transcript-pr1-1/));
+  });
+
+  it('a failed download is GitHub\'s, for the runner to classify, never a pass', async () => {
+    const e = await run('expect.row', step, ctxOf(world({ download: 1 }))).catch((x) => x);
+    expect(e).toMatchObject({ name: 'GhError' });
   });
 });
 

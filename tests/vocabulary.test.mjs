@@ -11,13 +11,13 @@ import { fakeClock } from './helpers/stubs.mjs';
  * Kanon's code run only at the release under test, fetched as an adopter fetches it.
  */
 
-/** §4.2's table, with `repo.apply` (decision 23 (b)), the deploy rehearsal's three (E5), and `bootstrap.end` (#59). */
+/** §4.2's table, with `repo.apply` (decision 23 (b)), the deploy rehearsal's three (E5), `bootstrap.end` (#59), and `expect.row` (E10). */
 const PLAN = [
   'kanon.init', 'repo.apply', 'kanon.doctor', 'kanon.at', 'register.write', 'pins.move', 'files.commit',
   'pr.open', 'pr.label', 'pr.merge', 'issue.open', 'issue.label', 'workflow.dispatch', 'release.cut',
   'deployment.await-approval', 'run.await', 'expect.init', 'expect.doctor', 'expect.run', 'expect.check',
   'expect.issue', 'expect.pr', 'expect.artifact', 'expect.api',
-  'environment.create', 'ruleset.tags', 'issue.await', 'bootstrap.end',
+  'environment.create', 'ruleset.tags', 'issue.await', 'bootstrap.end', 'expect.row',
 ];
 
 const verbs = Object.values(VOCABULARY);
@@ -70,7 +70,7 @@ describe('every verb that waits takes a deadline, and polls (§10)', () => {
   it('the waiting verbs', () => {
     expect(verbs.filter((v) => v.waits).map((v) => v.verb).sort()).toEqual([
       'deployment.await-approval', 'expect.api', 'expect.artifact', 'expect.check', 'expect.issue', 'expect.pr',
-      'expect.run', 'issue.await', 'pr.merge', 'release.cut', 'run.await',
+      'expect.row', 'expect.run', 'issue.await', 'pr.merge', 'release.cut', 'run.await',
     ]);
   });
 

@@ -13,10 +13,11 @@
 #
 # THE JOBS (§5.2): plan → start (a candidate's run: the Reporter's check run, in_progress) →
 # provision (each scenario's repository, its Apps' secrets, its topics) → model-key (a
-# `claude: subscription` scenario's token) → kanon-1, act-1, gate-2, kanon-2, act-2, gate-3,
-# kanon-3, act-3 (each scenario job a pair: a `mint` job that holds the driver's key and a job
-# handed only the token; each gate, the scenarios its phase runs) → verdict → report (the check
-# run's conclusion). docs/jobs.md says which job holds which secret, and why.
+# `claude: subscription` scenario's token, once the real-model ledger admitted it) → kanon-1,
+# act-1, author-label (the Author's label, for a scenario that names one), gate-2, kanon-2,
+# act-2, gate-3, kanon-3, act-3 (each scenario job a pair: a `mint` job that holds a key and a
+# job handed only the token; each gate, the scenarios its phase runs) → verdict → report (the
+# check run's conclusion). docs/jobs.md says which job holds which secret, and why.
 name: e2e
 
 on:
@@ -58,6 +59,10 @@ jobs:
       candidate-sha: ${{ steps.plan.outputs.candidate-sha }}
       scenarios: ${{ steps.plan.outputs.scenarios }}
       model-scenarios: ${{ steps.plan.outputs.model-scenarios }}
+      # The real-model scenarios the ledger refused for their cost (runner/ledger.mjs), for verdict.
+      skipped: ${{ steps.plan.outputs.skipped }}
+      # The planned scenarios whose `authorLabel` the Author applies after phase 1 (E10).
+      author-labels: ${{ steps.plan.outputs.author-labels }}
       marker: ${{ steps.plan.outputs.marker }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -319,9 +324,32 @@ jobs:
   # phase ended. An ended scenario's repository was deleted or archived by the `act` job that
   # ended it, and a scenario with fewer phases has nothing to run, so neither gets a phase-2 job,
   # and no mint is scoped to a repository that may be gone (runner/gate.mjs). Holds no key.
+  # THE AUTHOR'S LABEL (E10; the Owner, 2026-10-20): after phase 1, for each scenario whose
+  # scenario.json names an `authorLabel`, the test Author, a member of the scenario's App register,
+  # applies the label to its open pull request, so a model lane's gate admits it (K-AGENT-45). The
+  # driver can't: no register names it. Its own pair, minted from the Author's key; `gh` alone.
+  author-label:
+    name: author-label (${{ matrix.scenario.id }})
+    needs: [plan, start, act-1]
+    if: ${{ !cancelled() && needs.start.result != 'failure' && needs.plan.outputs.go == 'true' && needs.plan.outputs.author-labels != '[]' }}
+    permissions: {}
+    strategy:
+      fail-fast: false
+      max-parallel: 2 # maxParallel() in runner/sizing.mjs, from runner/settings.json
+      matrix:
+        scenario: ${{ fromJSON(needs.plan.outputs.author-labels) }}
+    uses: ./.github/workflows/e2e-author-label-run.yml
+    with:
+      repository-name: e2e-${{ matrix.scenario.id }}-${{ github.run_id }}-${{ github.run_attempt }}
+      head: ${{ matrix.scenario.head }}
+      label: ${{ matrix.scenario.label }}
+    secrets:
+      AUTHOR_APP_ID: ${{ secrets.AUTHOR_APP_ID }}
+      AUTHOR_APP_KEY: ${{ secrets.AUTHOR_APP_KEY }}
+
   gate-2:
     name: gate-2 (the scenarios phase 2 runs)
-    needs: [plan, start, act-1]
+    needs: [plan, start, act-1, author-label]
     if: ${{ !cancelled() && needs.start.result != 'failure' && needs.plan.outputs.go == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -513,6 +541,7 @@ jobs:
           CANDIDATE_SHA: ${{ needs.plan.outputs.candidate-sha }}
           START_RESULT: ${{ needs.start.result }}
           SCENARIOS: ${{ needs.plan.outputs.scenarios }}
+          SKIPPED: ${{ needs.plan.outputs.skipped }}
           RESULTS_DIR: ${{ runner.temp }}/results
           OUT: ${{ runner.temp }}/verdict
         run: node runner/verdict.mjs

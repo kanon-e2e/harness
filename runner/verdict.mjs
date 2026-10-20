@@ -26,7 +26,7 @@
 // verdict's, and the job's conclusion is what Kanon's gate reads (docs/jobs.md).
 //
 //   node runner/verdict.mjs   (reads TRIGGER, RELEASE, CANDIDATE_SHA, START_RESULT, SCENARIOS,
-//                              RESULTS_DIR, GH_TOKEN, GITHUB_RUN_ID, GITHUB_RUN_ATTEMPT; writes
+//                              SKIPPED, RESULTS_DIR, GH_TOKEN, GITHUB_RUN_ID, GITHUB_RUN_ATTEMPT; writes
 //                              OUT/verdict.json, the step's `verdict` and `red-issue` outputs,
 //                              and the step summary)
 
@@ -288,13 +288,33 @@ export const readResults = (dir) => {
   });
 };
 
+/**
+ * The scenarios `plan`'s real-model ledger refused for their cost (E10), joined to the planned
+ * ones and their results: each is planned, with its `gate` from `plan`, and reads `skipped` with
+ * the ledger's word. No repository was made for it, so no result of its own can exist; one that
+ * claims to (harness #24) is set aside for `plan`'s word.
+ * @param {Array<{ id: string, gate?: unknown }>} planned @param {any[]} results
+ * @param {Array<{ id: string, gate?: unknown, skipped: string }>} skipped
+ */
+export const withSkipped = (planned, results, skipped) => {
+  const ids = new Set(skipped.map((s) => s.id));
+  return {
+    planned: [...planned.filter((p) => !ids.has(p.id)), ...skipped.map((s) => ({ id: s.id, gate: s.gate === true }))],
+    results: [...results.filter((r) => !ids.has(r?.scenario)), ...skipped.map((s) => ({ schema: RESULT_SCHEMA, scenario: s.id, result: 'skipped', skipped: s.skipped }))],
+  };
+};
+
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const env = process.env;
-  const planned = JSON.parse(env.SCENARIOS || '[]').map((/** @type {any} */ s) => ({ id: s.id, gate: s.gate === true }));
+  const { planned, results } = withSkipped(
+    JSON.parse(env.SCENARIOS || '[]').map((/** @type {any} */ s) => ({ id: s.id, gate: s.gate === true })),
+    readResults(env.RESULTS_DIR ?? 'results'),
+    JSON.parse(env.SKIPPED || '[]'),
+  );
   const run = { id: env.GITHUB_RUN_ID ?? '', attempt: env.GITHUB_RUN_ATTEMPT ?? '', url: `${env.GITHUB_SERVER_URL ?? 'https://github.com'}/${env.GITHUB_REPOSITORY ?? H}/actions/runs/${env.GITHUB_RUN_ID ?? ''}` };
   const v = await give({
     trigger: env.TRIGGER ?? '', release: env.RELEASE ?? '', candidateSha: env.CANDIDATE_SHA ?? '', startResult: env.START_RESULT ?? '', run, planned,
-    results: readResults(env.RESULTS_DIR ?? 'results'),
+    results,
   }, { gh: ghProcess(env), log: (line) => console.log(line) });
   const out = env.OUT ?? 'verdict';
   mkdirSync(out, { recursive: true });

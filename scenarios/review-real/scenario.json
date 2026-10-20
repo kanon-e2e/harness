@@ -1,0 +1,10 @@
+{
+  "id": "review-real",
+  "family": "lane",
+  "tier": "model",
+  "gate": false,
+  "apps": ["author", "judge"],
+  "claude": "subscription",
+  "deadlineMinutes": 120,
+  "authorLabel": { "head": "docs-note", "label": "review:please" }
+}
