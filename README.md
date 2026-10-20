@@ -117,10 +117,12 @@ gh workflow run e2e.yml -R kanon-e2e/harness -f release=<candidate> -f select=do
 - **`lane-check-mixed-pin`** ([`lane-check-mixed-pin/`](scenarios/lane-check-mixed-pin/README.md), `gate: false`). The caller left at `v0.40.2` beside the release under test: two versions in one repository.
 - **`lane-check-secrets-inherit`** ([`lane-check-secrets-inherit/`](scenarios/lane-check-secrets-inherit/README.md), `gate: false`). The caller passing `secrets: inherit` to Kanon's workflow, in place of the two Judge secrets mapped by name.
 
-Dispatch the family:
+Dispatch them one at a time. `select=lane` names the whole `lane` family, which also holds `refuse-review-label` and the real-model `review-real`: it would spend the Owner's subscription on a run meant only for `lane-check`.
 
 ```sh
-gh workflow run e2e.yml -R kanon-e2e/harness -f release=<candidate> -f select=lane
+gh workflow run e2e.yml -R kanon-e2e/harness -f release=<candidate> -f select=lane-check-inexact-pin
+gh workflow run e2e.yml -R kanon-e2e/harness -f release=<candidate> -f select=lane-check-mixed-pin
+gh workflow run e2e.yml -R kanon-e2e/harness -f release=<candidate> -f select=lane-check-secrets-inherit
 ```
 
 **The gate refusals** (plan 0012 step E12, no model, `gate: false` until burn-in). Each one puts one of the lanes' own admission rules in front of a real event the rule must refuse. It then expects the refusal concretely: which jobs ran, which were skipped, and what was filed.
@@ -128,7 +130,7 @@ gh workflow run e2e.yml -R kanon-e2e/harness -f release=<candidate> -f select=la
 - **`refuse-review-label`** ([`refuse-review-label/`](scenarios/refuse-review-label/README.md), family `lane`, `gate: false`). A label applied by an identity outside the App register starts nothing. After `install-review`'s clean install, the driver App, which no register row names, labels a pull request `review:please`. The review lane's run must succeed with `review / filter` `success`, and with `review / review` and `review / notify-unlabeled` `skipped`.
 - **`refuse-deploy-ci-red`** ([`refuse-deploy-ci-red/`](scenarios/refuse-deploy-ci-red/README.md), family `deploy`, `gate: false`). Plan 0010's deploy gate refuses a release whose CI is red (`ci-red`, `K-SHIP-8`). The scenario takes the rehearsal's install, with the project's own tests in `ci.yml`, merges a change that breaks them, and cuts one release. CI on the release's commit must be red. The deploy run must stop at `release / gate`, with nothing built or deployed and staging's issue filed.
 
-The Merger's refusal of a pull request with no verdict has no scenario. Every event the harness makes is the driver App's, and the Merger's membership gate refuses that before it reads a verdict ([`scenarios/README.md`](scenarios/README.md)). `select=lane` also picks up the `lane-check` family, and `select=deploy` the rehearsal, so dispatch these one at a time:
+The Merger's refusal of a pull request with no verdict has no scenario. Every event the harness makes is the driver App's, and the Merger's membership gate refuses that before it reads a verdict ([`scenarios/README.md`](scenarios/README.md)). `select=lane` also picks up the `lane-check` family and the real-model `review-real`, and `select=deploy` the rehearsal, so dispatch these one at a time:
 
 ```sh
 gh workflow run e2e.yml -R kanon-e2e/harness -f release=<candidate> -f select=refuse-review-label

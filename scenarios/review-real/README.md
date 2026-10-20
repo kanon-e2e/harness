@@ -27,13 +27,12 @@ The review lane starts only on a label applied by a member or a registered agent
 | 1 | `act` | `files.commit` of `change/` on the branch `docs-note`, then `pr.open` from it, as the driver | |
 | 1 | `act` | `run.await` for `ci.yml`'s `pull_request` run on the pull request | It completes, so the label that follows isn't deferred to CI's completion. |
 | — | `author-label` | **The label:** the test Author applies `review:please` | |
-| 2 | `act` | `expect.api` on the review caller's `pull_request_target` runs for `docs-note` | `/total_count` is 2: the `opened` run, which the filter declines for a bot's pull request, and the label's. It waits until both exist, so the next step keeps the label's. |
-| 2 | `act` | `run.await` for `agent-review.yml`'s `pull_request_target` run on the pull request | The label's run completes: the review, on the model. |
-| 3 | `act` | `expect.run` | The run concluded `success`, with `review / filter` and `review / review` `success`. |
+| 2 | `act` | `run.await` for `agent-review.yml`'s `pull_request_target` run on the pull request, with `actor: author` | The run the Author's label started completes: the review, on the model. It is kept by its `triggering_actor`, the Author's bot login, not as the newest run: the Reviewer labels the pull request as it works (`agent:reviewer`, `sev:*`), and each of its labels starts a newer run on the same head that the filter skips in seconds. So the wait doesn't depend on how many label runs there are (harness #104). |
 | 3 | `act` | `expect.row` | The run's `kanon-telemetry-review-<run>-<attempt>` row is a version-2 `review` row whose `total_cost_usd` is at most $30, the lane's `--max-budget-usd`. Its cost is kept as the result's `costUsd`, the ledger's history. `outcome: unavailable` reads `infra`. |
+| 3 | `act` | `expect.run` | The run concluded `success`, with `review / filter` and `review / review` `success`. |
 | 3 | `act` | `expect.pr` | A post or review by `kanon-e2e-judge` carries the Reviewer's role marker (`role:reviewer`): a verdict, whichever it is. |
 
-**Why the row comes before the verdict.** A step that fails ends the scenario, and the steps after it are skipped. The row is read first so its cost is recorded whatever the verdict step finds: the ledger reads only recorded costs.
+**Why the row comes first** (harness #105). A step that fails ends the scenario, and the steps after it are skipped. The row is read before the run's conclusion and the verdict, so its cost is recorded whatever they find, a failed review included: the ledger reads only recorded costs, and a scenario whose failures recorded none would look cheaper than it is. The lane uploads its row even when the agent fails (Kanon's `agent-finish`, `if: always()`). A run the gate refused uploads none, and `expect.row` fails at its deadline, as `expect.run` would.
 
 ## What it creates
 
@@ -62,9 +61,8 @@ gh workflow run e2e.yml -R kanon-e2e/harness -f release=<candidate> -f select=re
 
 The failing job's summary names the first failure. A failure in phase 1 is an install failure: read [`install-review`'s list](../install-review/README.md#when-it-is-red). After it, what it usually means:
 
-- **`expect.api` on `/total_count`.** The label's run never started. Check the `author-label` job: the mint failed (the Author App's installation or key), or no open pull request from `docs-note` was found. If the job labelled the pull request, the gate may have refused the Author: the register lacks its rows.
-- **`run.await` passed its deadline.** The review took longer than 25 minutes, or the label was deferred to a CI run that hadn't finished.
+- **`run.await` passed its deadline.** No run the Author started reached the pull request's head: check the `author-label` job (the mint failed, on the Author App's installation or key, or it found no open pull request from `docs-note`). Or the review took longer than 25 minutes, or the label was deferred to a CI run that hadn't finished. Its message names who started the runs it saw.
+- **`expect.row`.** No row uploaded (Kanon renamed the artifact or the lane), or the cost was past $30. `infra` with `unavailable`: the model was never reached, so it is retried, not failed.
 - **`expect.run` on `review / review` `skipped`.** The gate refused the label: the Author isn't on a role's row of the register, or Kanon changed who may label.
 - **`expect.run` on `review / review` `failure`.** The agent failed. Its run's summary says why. A missing `CLAUDE_CODE_OAUTH_TOKEN` reads `infra` before this, at the `act` job's precondition.
-- **`expect.row`.** No row uploaded (Kanon renamed the artifact or the lane), or the cost was past $30. `infra` with `unavailable`: the model was never reached, so it is retried, not failed.
 - **`expect.pr` on the marker.** The Reviewer posted nothing with its role marker, or posted as another App.

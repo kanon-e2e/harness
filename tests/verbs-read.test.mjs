@@ -139,6 +139,36 @@ describe('run.await', () => {
     expect(ctx.state.runs).toEqual({ ci: 8 });
   });
 
+  it('with `actor`, keeps the run that App started, not a newer one another App started on the same head (harness #104)', async () => {
+    const LABEL = `GET repos/${REPO}/actions/workflows/agent-review.yml/runs?event=pull_request_target&head_sha=def&per_page=20`;
+    const by = (login, run) => ({ ...run, triggering_actor: { login }, actor: { login: 'someone-else' } });
+    const opened = by('kanon-e2e-driver[bot]', { id: 40, run_number: 1, status: 'completed', conclusion: 'skipped' });
+    const review = by('kanon-e2e-author[bot]', { id: 41, run_number: 2, status: 'in_progress' });
+    // The Reviewer labels the pull request mid-review: each label starts a run its filter skips in seconds.
+    const sev = by('kanon-e2e-judge[bot]', { id: 42, run_number: 3, status: 'completed', conclusion: 'skipped' });
+    const agent = by('kanon-e2e-judge[bot]', { id: 43, run_number: 4, status: 'completed', conclusion: 'skipped' });
+    const g = stubGh({
+      [`GET repos/${REPO}/pulls/5`]: { head: { sha: 'def' } },
+      [LABEL]: inTurn({ workflow_runs: [opened, review, sev] }, { workflow_runs: [agent, sev, { ...review, status: 'completed', conclusion: 'success' }, opened] }),
+    });
+    const ctx = context({ gh: g.gh, state: { prs: { note: 5 } } });
+    await run('run.await', { name: 'review', workflow: 'agent-review.yml', event: 'pull_request_target', pr: 'note', actor: 'author', deadline: 25 }, ctx);
+    expect(ctx.state.runs).toEqual({ review: 41 });
+    // With no `actor`, the newest of all, as before.
+    const g2 = stubGh({ [`GET repos/${REPO}/pulls/5`]: { head: { sha: 'def' } }, [LABEL]: { workflow_runs: [opened, { ...review, status: 'completed' }, agent] } });
+    const plain = context({ gh: g2.gh, state: { prs: { note: 5 } } });
+    await run('run.await', { name: 'review', workflow: 'agent-review.yml', event: 'pull_request_target', pr: 'note', deadline: 5 }, plain);
+    expect(plain.state.runs).toEqual({ review: 43 });
+  });
+
+  it('with `actor`, a run started only by others is not one: it waits, and says who started them; `actor` takes only a test App', async () => {
+    const LABEL = `GET repos/${REPO}/actions/workflows/agent-review.yml/runs?event=pull_request_target&head_sha=def&per_page=20`;
+    const g = stubGh({ [`GET repos/${REPO}/pulls/5`]: { head: { sha: 'def' } }, [LABEL]: { workflow_runs: [{ id: 9, run_number: 1, status: 'completed', triggering_actor: { login: 'kanon-e2e-driver[bot]' } }] } });
+    await expect(run('run.await', { workflow: 'agent-review.yml', event: 'pull_request_target', pr: 'note', actor: 'author', deadline: 1 }, context({ gh: g.gh, state: { prs: { note: 5 } } })))
+      .rejects.toMatchObject(failsWith(/started by kanon-e2e-author\[bot\] yet; 1 started by others: kanon-e2e-driver\[bot\]/));
+    expect(VOCABULARY['run.await'].args.actor.enum).toEqual(['author', 'judge', 'releaser']);
+  });
+
   it('fails when the deadline passes', async () => {
     const g = stubGh({ [`GET repos/${REPO}/branches/main`]: { commit: { sha: 'abc' } }, [RUNS]: { workflow_runs: [] } });
     await expect(run('run.await', { workflow: 'ci.yml', event: 'push', branch: 'main', deadline: 1 }, context({ gh: g.gh }))).rejects.toMatchObject(failsWith(/deadline.*no run/));

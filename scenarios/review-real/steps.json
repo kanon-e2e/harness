@@ -25,15 +25,14 @@
     {
       "kanon": [],
       "act": [
-        { "verb": "expect.api", "path": "repos/{{repository}}/actions/workflows/agent-review.yml/runs?event=pull_request_target&branch=docs-note", "pointer": "/total_count", "equals": 2, "deadline": 5 },
-        { "verb": "run.await", "name": "review", "workflow": "agent-review.yml", "event": "pull_request_target", "pr": "note", "deadline": 25 }
+        { "verb": "run.await", "name": "review", "workflow": "agent-review.yml", "event": "pull_request_target", "pr": "note", "actor": "author", "deadline": 25 }
       ]
     },
     {
       "kanon": [],
       "act": [
-        { "verb": "expect.run", "run": "review", "conclusion": "success", "jobs": [{ "name": "review / filter", "conclusion": "success" }, { "name": "review / review", "conclusion": "success" }], "deadline": 2 },
         { "verb": "expect.row", "run": "review", "lane": "review", "ceilingUsd": 30, "deadline": 5 },
+        { "verb": "expect.run", "run": "review", "conclusion": "success", "jobs": [{ "name": "review / filter", "conclusion": "success" }, { "name": "review / review", "conclusion": "success" }], "deadline": 2 },
         { "verb": "expect.pr", "pr": "note", "marker": "role:reviewer", "markerBy": "kanon-e2e-judge", "deadline": 5 }
       ]
     }

@@ -91,10 +91,9 @@ export function fitCap(catalogue, cap, day) {
 const entry = (s) => ({ id: s.id, apps: s.apps, claude: s.claude, gate: s.gate === true });
 
 /**
-/**
  * `authorLabels` is the planned scenarios whose `authorLabel` the `author-label` job applies after
- * phase 1, for its matrix. `left` is the `gate: false` scenarios the cap left out of this run, by id; `skipped` is the
- * scenarios the ledger refused for their cost, each with its `skipped` word, for `verdict`;
+ * phase 1, for its matrix. `left` is the `gate: false` scenarios the cap left out of this run, by
+ * id; `skipped` is the scenarios the ledger refused for their cost, each with its `skipped` word, for `verdict`;
  * `ledger` is every real-model scenario's admission or refusal, with its reason.
  * @typedef {{ go: boolean, trigger: string, release: string, candidateSha: string, scenarios: any[], modelScenarios: any[], authorLabels: Array<{ id: string, head: string, label: string }>, left: string[], skipped: any[], ledger: Array<{ id: string, started: boolean, reason: string }>, marker: string, reason: string }} Decision
  */

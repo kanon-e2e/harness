@@ -54,13 +54,11 @@ describe('review-real', () => {
     expect(s.phases.flatMap((p) => [...p.kanon, ...p.act]).filter((x) => x.verb === 'pr.label')).toEqual([]);
   });
 
-  it('phase 2 waits for the label\'s review run; phase 3 holds the run, the row and the verdict, the row first so its cost is kept', () => {
+  it('phase 2 waits for the run the Author\'s label started, whatever other label runs exist; phase 3 holds the row first, so its cost is kept whatever the run did, then the run and the verdict', () => {
     expect(s.phases[1].kanon).toEqual([]);
-    expect(s.phases[1].act.map((x) => x.verb)).toEqual(['expect.api', 'run.await']);
-    expect(s.phases[1].act[0]).toMatchObject({ pointer: '/total_count', equals: 2 });
-    expect(s.phases[1].act[1]).toMatchObject({ name: 'review', workflow: 'agent-review.yml', event: 'pull_request_target', pr: 'note' });
-    expect(s.phases[2].act.map((x) => x.verb)).toEqual(['expect.run', 'expect.row', 'expect.pr']);
-    expect(s.phases[2].act[1]).toEqual({ verb: 'expect.row', run: 'review', lane: 'review', ceilingUsd: 30, deadline: 5 });
+    expect(s.phases[1].act).toEqual([{ verb: 'run.await', name: 'review', workflow: 'agent-review.yml', event: 'pull_request_target', pr: 'note', actor: 'author', deadline: 25 }]);
+    expect(s.phases[2].act.map((x) => x.verb)).toEqual(['expect.row', 'expect.run', 'expect.pr']);
+    expect(s.phases[2].act[0]).toEqual({ verb: 'expect.row', run: 'review', lane: 'review', ceilingUsd: 30, deadline: 5 });
     expect(s.phases[2].act[2]).toEqual({ verb: 'expect.pr', pr: 'note', marker: 'role:reviewer', markerBy: 'kanon-e2e-judge', deadline: 5 });
   });
 
@@ -104,7 +102,7 @@ describe('review-real\'s expectations on a reviewed run, and on runs that must f
     [`GET repos/${REPO}/actions/runs/${RUN}`]: { id: RUN, status: 'completed', conclusion },
     [`GET repos/${REPO}/actions/runs/${RUN}/jobs?per_page=100`]: { jobs: jobs.map(([name, c], i) => ({ id: 100 + i, name, conclusion: c })) },
   }).gh;
-  const [run, , verdict] = s.phases[2].act;
+  const [, run, verdict] = s.phases[2].act;
   const holdRun = (gh) => VOCABULARY['expect.run'].run(bare(run), context({ gh, state: { runs: { review: RUN } } }));
   const prOf = (reviews) => stubGh({
     [`GET repos/${REPO}/pulls/4`]: { state: 'open', merged: false, labels: [{ name: 'review:please' }], user: { login: 'kanon-e2e-driver[bot]' }, body: '' },
@@ -112,6 +110,24 @@ describe('review-real\'s expectations on a reviewed run, and on runs that must f
     [`GET repos/${REPO}/pulls/4/reviews?per_page=100`]: [reviews],
   }).gh;
   const holdVerdict = (gh) => VOCABULARY['expect.pr'].run(bare({ ...verdict, deadline: 1 }), context({ gh, state: { prs: { note: 4 } } }));
+
+  it('phase 2 keeps the run the Author\'s label started, though the Reviewer\'s own labels start newer, quickly skipped runs on the same head (harness #104)', async () => {
+    const [awaited] = s.phases[1].act;
+    const by = (login, id, status, conclusion) => ({ id, run_number: id, status, conclusion, triggering_actor: { login } });
+    const listing = `GET repos/${REPO}/actions/workflows/agent-review.yml/runs?event=pull_request_target&head_sha=abc&per_page=20`;
+    const g = stubGh({
+      [`GET repos/${REPO}/pulls/4`]: { head: { sha: 'abc' } },
+      [listing]: { workflow_runs: [
+        by('kanon-e2e-driver[bot]', 1, 'completed', 'skipped'),
+        by('kanon-e2e-author[bot]', 2, 'completed', 'success'),
+        by('kanon-e2e-judge[bot]', 3, 'completed', 'skipped'),
+        by('kanon-e2e-judge[bot]', 4, 'completed', 'skipped'),
+      ] },
+    });
+    const ctx = context({ gh: g.gh, state: { prs: { note: 4 } } });
+    await VOCABULARY['run.await'].run(bare(awaited), ctx);
+    expect(ctx.state.runs.review).toBe(2);
+  });
 
   it('the run: passes when the review ran; fails when the gate refused the label, or the agent failed', async () => {
     await holdRun(runOf('success', [['review / filter', 'success'], ['review / notify-unlabeled', 'skipped'], ['review / review', 'success']]));
