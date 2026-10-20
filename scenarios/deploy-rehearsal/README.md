@@ -38,12 +38,11 @@ Each release is a pull request merged through the front door, then the release p
 
 Between the first release and the second, `kanon doctor` runs on the `kanon` job's read-only token. `expect.doctor` holds every one of doctor's 18 `deploy.*` findings absent. It allows two checks `unchecked`: `secrets`, as probe 19 measured, and `deploy-secrets`, the organisation secrets doctor can't list without Secrets: read. Doctor runs after the first run because `deploy.trust-unproven` reads the trust probe's line from a completed run of the lane.
 
-## The approval: a candidate's run and a nightly
+## The approval: cancelled on every run
 
 `deployment.await-approval` sits alone in phase 2, so that it has an `act` job's whole 30 minutes.
 
-- **A nightly or a dispatch** cancels the first release's run as soon as `production / deploy` is waiting. The job must then end `cancelled`; anything else fails the scenario. No person is asked anything.
-- **A candidate's run**, from the poll, files an issue in `kanon-e2e/harness` asking the Owner to approve `production` for the candidate (decision 9), and waits for the decision. The Owner opens the linked run, chooses **Review deployments**, and approves within the step's deadline of 25 minutes. Production's deploy then runs.
+Every run, a candidate's included, cancels the first release's run as soon as `production / deploy` is waiting. The job must then end `cancelled`; anything else fails the scenario. No person is asked anything. The Owner decided this on 2026-10-20, amending decision 9: the Owner's approval on a candidate's run had to come inside the step's 25 minutes, and two runs of `candidate-v0.42.0` went red on it, one approved half a minute early and one too late (#81, #84). That a person can approve a deploy the test Releaser published was measured by probe 7 (Kanon #968), and Kanon's own deploys ask the Owner for it on every release.
 
 ## Phases
 
@@ -64,19 +63,19 @@ One public repository in `kanon-e2e`, `e2e-deploy-rehearsal-<run>-<attempt>`, ho
 - staging's issue;
 - about a dozen workflow runs.
 
-On a candidate's run, it also creates one issue in `kanon-e2e/harness`, the approval request, which the harness closes once the Owner decides. The repository is deleted when the scenario passes. When it fails, the repository is archived for 24 hours, with the `kanon-e2e-failed` topic.
+The repository is deleted when the scenario passes. When it fails, the repository is archived for 24 hours, with the `kanon-e2e-failed` topic.
 
 ## What it costs
 
-- **Time:** about 45 minutes on a nightly, an estimate until the first dispatch measures it. That is three `kanon` jobs, three `act` jobs and three releases' runs in the scenario repository. A candidate's run adds however long the Owner takes to approve. The scenario's deadline is 100 minutes.
+- **Time:** about 45 minutes on a nightly, an estimate until the first dispatch measures it. That is three `kanon` jobs, three `act` jobs and three releases' runs in the scenario repository. The scenario's deadline is 100 minutes.
 - **Minutes:** the scenario repository and the harness are both public, so their runs cost nothing (probe 6).
-- **People:** on a candidate's run, one approval from the Owner. On a nightly or a dispatch, none. GitHub still notifies the Owner, as `production`'s reviewer, each time a run waits on it.
+- **People:** none. GitHub still notifies the Owner, as `production`'s reviewer, each time a run waits on it.
 
 ## When it is red
 
 The `act` job's summary names the first failure. What it usually means:
 
-- **`deployment.await-approval` passed its deadline.** The first release's run never reached `production`. Look at its gate, which waits for `ci.yml`'s push run at the release's commit and fails if `Lane check` failed there, and at `staging / deploy`. On a candidate's run, the Owner may not have approved in time.
+- **`deployment.await-approval` passed its deadline.** The first release's run never reached `production`. Look at its gate, which waits for `ci.yml`'s push run at the release's commit and fails if `Lane check` failed there, and at `staging / deploy`.
 - **`production / deploy` ended other than `cancelled`.** The lane ran production's job without the reviewer, or the cancel didn't stop it. The environment's protection didn't hold: look at the environment first.
 - **`expect.run` on the first release.** A job is missing or failed. A missing name means the lane's job names moved, which a Kanon change should say. A failed `release / probe` means the trust probe's judge refused the hook's answer.
 - **`release.cut` passed its deadline.** release-please opened no release pull request, or the Releaser published no Release. The release workflow's guard fails on anything but squash-only merging. A tag ruleset that doesn't let the Releaser through stops the tag.

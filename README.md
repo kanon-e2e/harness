@@ -66,7 +66,7 @@ Each scenario's own README says what it sets up, what each step expects, what it
 
 Doctor must report no `deploy.*` finding.
 
-The approval differs by trigger. On a candidate's run, the scenario files the Owner's approval request in this repository and waits for the Owner to approve `production`: one approval per candidate (decision 9). On a nightly or a dispatch, it cancels the run at production's wait, and holds production's deploy job to ending `cancelled`. Dispatch it on its own:
+On every run, a candidate's included, the scenario cancels the run at production's wait, and holds production's deploy job to ending `cancelled`: no person approves anything (decision 9, as the Owner amended it on 2026-10-20). Dispatch it on its own:
 
 ```sh
 gh workflow run e2e.yml -R kanon-e2e/harness -f release=v0.40.2 -f select=deploy-rehearsal

@@ -120,7 +120,7 @@ describe('three releases, each with what it expects', () => {
     expect(run.jobs.map((j) => j.name)).toContain('staging / deploy');
   });
 
-  it('waits for production\'s reviewer in a phase of its own, so a candidate\'s Owner has an act job\'s whole time to approve', () => {
+  it('waits for production\'s reviewer in a phase of its own, with an act job\'s whole time to see the wait and cancel', () => {
     const [wait] = ofVerb('deployment.await-approval');
     const phase = phases[wait.phase - 1];
     expect(phase.act[0]).toEqual(expect.objectContaining({ verb: 'deployment.await-approval' }));
