@@ -27,7 +27,7 @@ const load = (id) => {
 const strip = ({ phase: _p, segment: _s, ...step }) => step;
 
 /** The scenarios that burnt in and gate (#43): each turned `gate: true` in its own pull request. */
-const GATED = new Set(['upgrade-previous']);
+const GATED = new Set(['upgrade-previous', 'upgrade-previous-1']);
 
 describe.each(Object.entries(SCENARIOS))('%s', (id, release) => {
   const s = load(id);

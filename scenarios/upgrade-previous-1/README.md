@@ -4,7 +4,7 @@ Kanon's plan 0012 step E7 (harness #42): an adopter on the stable release before
 
 `previous-1` is the stable release of Kanon before `previous`, the latest one below the release under test (`resolveRelease` in [`runner/lib/kanon.mjs`](../../runner/lib/kanon.mjs)): `v0.40.1` at `candidate-v0.41.0`, `v0.40.0` at `v0.40.2`. Its sibling, [`upgrade-previous`](../upgrade-previous/README.md), starts one stable release later. The two together say an adopter needn't take every release.
 
-`scenario.json`: family `upgrade`, tier `none`, Claude `none`, `author` and `judge` as its test Apps (the `full` feature's Apps), and `gate: false`. It counts toward the release gate only after burn-in (step E9) and the Owner's decision.
+`scenario.json`: family `upgrade`, tier `none`, Claude `none`, `author` and `judge` as its test Apps (the `full` feature's Apps), and `gate: true`: it burnt in with ten passes in a row, scheduled or dispatched (Kanon plan 0012 decision 24), so its result counts toward the release gate on every candidate.
 
 ## What the repository holds
 
