@@ -1,0 +1,16 @@
+# Checks each agent App in the register against its installation (docs/apps.md). Run it by hand:
+#   gh workflow run apps-check.yml
+# Edited by hand to hand the called workflow every secret, with `secrets: inherit`.
+name: apps-check
+
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  apps:
+    permissions:
+      contents: read
+    uses: yedeya-labs/kanon/.github/workflows/apps-check.yml@{{release}}
+    secrets: inherit

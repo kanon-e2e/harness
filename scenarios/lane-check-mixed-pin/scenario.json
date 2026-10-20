@@ -1,0 +1,11 @@
+{
+  "id": "lane-check-mixed-pin",
+  "family": "lane",
+  "tier": "none",
+  "gate": false,
+  "apps": [
+    "judge"
+  ],
+  "claude": "none",
+  "deadlineMinutes": 45
+}

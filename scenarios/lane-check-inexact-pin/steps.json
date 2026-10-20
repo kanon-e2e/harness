@@ -1,0 +1,28 @@
+{
+  "phases": [
+    {
+      "kanon": [
+        {"verb": "kanon.init", "flags": ["--feature=review", "--review-trigger=labelled", "--no-sensitive-data"]},
+        {"verb": "register.write"},
+        {"verb": "expect.init", "status": "steps-left", "findings": ["label.create", "milestone.buckets", "ruleset.first-commit"], "fields": [{"pointer": "/pin", "equals": "{{release}}"}]}
+      ],
+      "act": [
+        {"verb": "files.commit", "from": "kanon", "message": "Install Kanon's review feature"},
+        {"verb": "repo.apply", "firstCommit": true},
+        {"verb": "run.await", "name": "ci-main", "workflow": "ci.yml", "event": "push", "branch": "main", "deadline": 10},
+        {"verb": "expect.check", "branch": "main", "name": "Lane check", "conclusion": "success", "deadline": 5},
+        {"verb": "repo.apply", "firstCommit": true},
+        {"verb": "files.commit", "from": "scenario", "dir": "broken", "branch": "broken", "message": "ci: edit the apps-check caller, with an inexact pin"},
+        {"verb": "pr.open", "name": "broken", "head": "broken", "title": "ci: edit the apps-check caller", "body": "The harness's lane-check-inexact-pin scenario: this pull request breaks the apps-check caller with an inexact pin, and Lane check must fail it."},
+        {"verb": "files.commit", "from": "scenario", "dir": "fixed", "branch": "fixed", "message": "ci: keep the apps-check caller as init writes it"},
+        {"verb": "pr.open", "name": "fixed", "head": "fixed", "title": "ci: keep the apps-check caller as init writes it", "body": "The harness's lane-check-inexact-pin scenario: this pull request rewrites the apps-check caller correctly, pinned to the release with each secret mapped, and Lane check must pass it."},
+        {"verb": "run.await", "name": "ci-broken", "workflow": "ci.yml", "event": "pull_request", "pr": "broken", "deadline": 10},
+        {"verb": "expect.run", "run": "ci-broken", "conclusion": "failure", "jobs": [{"name": "Lane check", "conclusion": "failure"}], "deadline": 2},
+        {"verb": "expect.check", "pr": "broken", "name": "Lane check", "conclusion": "failure", "deadline": 5},
+        {"verb": "run.await", "name": "ci-fixed", "workflow": "ci.yml", "event": "pull_request", "pr": "fixed", "deadline": 10},
+        {"verb": "expect.run", "run": "ci-fixed", "conclusion": "success", "jobs": [{"name": "Lane check", "conclusion": "success"}], "deadline": 2},
+        {"verb": "expect.check", "pr": "fixed", "name": "Lane check", "conclusion": "success", "deadline": 5}
+      ]
+    }
+  ]
+}

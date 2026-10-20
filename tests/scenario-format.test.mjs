@@ -246,6 +246,16 @@ describe('the closed vocabulary, each verb in its kind of segment (§4.2)', () =
     const missing = writeScenario({ steps: onePhase([], [{ verb: 'files.commit', from: 'scenario', dir: 'files/none', message: 'm' }]) });
     expect(validateScenarioDir(missing).join('\n')).toMatch(/files\/none/);
   });
+
+  it('takes {{release}} and {{repository}} in a files.commit directory, as start/ does, and refuses any other substitution there', () => {
+    const steps = onePhase([], [{ verb: 'files.commit', from: 'scenario', dir: 'files/fix', branch: 'fix', message: 'm' }]);
+    const two = writeScenario({ steps, extra: { 'files/fix/a.yml': 'uses: x@{{release}} in {{repository}}, ${{ secrets.A }}\n' } });
+    expect(validateScenarioDir(two)).toEqual([]);
+    const other = writeScenario({ steps, extra: { 'files/fix/a.yml': 'uses: x@{{version}}\n' } });
+    expect(validateScenarioDir(other).join('\n')).toMatch(/files\/fix\/a\.yml.*\{\{version\}\} is not one of the two/);
+    const inPath = writeScenario({ steps, extra: { 'files/fix/{{owner}}.md': 'x\n' } });
+    expect(validateScenarioDir(inPath).join('\n')).toMatch(/\{\{owner\}\} is not one of the two/);
+  });
 });
 
 describe('expect.api reads only the scenario repository\'s own API (§4.2)', () => {

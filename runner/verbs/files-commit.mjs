@@ -4,11 +4,15 @@
 // data (`ctx.kanonFiles`, E4's handling of the crossing artifact); this verb still refuses any
 // path outside the clone or under `.git/` before writing a byte, and any path through a symlink
 // the checked-out branch holds, since the branch may be one a workflow under test pushed.
+// Files `from: scenario` take `start/`'s two substitutions, `{{release}}` and `{{repository}}`,
+// so a file committed after the install can pin the release under test (harness E12); the
+// validator refuses any other substitution in that directory, as it does in `start/`.
 
 import { lstatSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, normalize, relative, sep } from 'node:path';
 
 import { BRANCH, str, strs } from '../lib/args.mjs';
+import { strangers, substitute, substituteBytes } from '../lib/substitute.mjs';
 
 /** Who commits: the harness, not a person. */
 export const IDENTITY = { name: 'kanon-e2e harness', email: 'kanon-e2e-harness@users.noreply.github.com' };
@@ -74,12 +78,24 @@ export default {
         ok = false;
       }
       if (!ok) p.push(`\`dir\` \`${step.dir}\` is not a directory of the scenario's`);
+      else {
+        try {
+          for (const f of walk(join(scope.scenarioDir, step.dir))) {
+            for (const s of new Set([...strangers(f.path), ...(f.bytes.includes(0) ? [] : strangers(f.bytes.toString('utf8')))])) p.push(`\`${step.dir}/${f.path}\`: the substitution ${s} is not one of the two, {{release}} and {{repository}}`);
+          }
+        } catch (e) {
+          p.push(`\`dir\` \`${step.dir}\`: ${/** @type {Error} */ (e).message}`);
+        }
+      }
     }
     return p;
   },
   /** @param {any} step @param {any} ctx */
   async run(step, ctx) {
-    const files = step.from === 'scenario' ? walk(join(ctx.scenarioDir, step.dir)) : step.from === 'kanon' ? ctx.kanonFiles ?? [] : [];
+    const values = { release: ctx.release, repository: ctx.repository };
+    const files = step.from === 'scenario'
+      ? walk(join(ctx.scenarioDir, step.dir)).map((f) => ({ path: substitute(f.path, values), bytes: substituteBytes(f.bytes, values) }))
+      : step.from === 'kanon' ? ctx.kanonFiles ?? [] : [];
     for (const f of files) {
       const why = outside(f.path);
       if (why) throw new Error(`refused: \`${f.path}\` is ${why}`);

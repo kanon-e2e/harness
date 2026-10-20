@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, readdirSync, symlinkSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, symlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { classify } from '../runner/lib/retry.mjs';
@@ -170,6 +170,20 @@ describe('files.commit', () => {
       'push -q origin HEAD:refs/heads/docs',
     ]);
     expect(x.calls.every((c) => c.cwd === clone)).toBe(true);
+  });
+
+  it('fills in {{release}} and {{repository}} in the scenario\'s files, as start/ takes them, and leaves a workflow\'s ${{ }} and a binary file as they are', async () => {
+    const clone = tempDir('clone-');
+    const dir = writeTree(tempDir('scenario-'), {
+      'broken/.github/workflows/apps-check.yml': 'uses: yedeya-labs/kanon/.github/workflows/apps-check.yml@{{release}}\nid: ${{ secrets.JUDGE_APP_ID }}\nin: {{repository}}\n',
+      'broken/notes/{{release}}.md': 'x\n',
+    });
+    writeFileSync(join(dir, 'broken/blob.bin'), Buffer.from([0, 123, 123, 0x72, 125, 125]));
+    const x = stubExec([[(c) => c.args.includes('ls-remote'), () => ({ status: 2 })]]);
+    await run('files.commit', { from: 'scenario', dir: 'broken', branch: 'broken', message: 'm' }, context({ exec: x.exec, clone, scenarioDir: dir }));
+    expect(readFileSync(join(clone, '.github/workflows/apps-check.yml'), 'utf8')).toBe(`uses: yedeya-labs/kanon/.github/workflows/apps-check.yml@${RELEASE}\nid: \${{ secrets.JUDGE_APP_ID }}\nin: ${REPO}\n`);
+    expect(existsSync(join(clone, `notes/${RELEASE}.md`))).toBe(true);
+    expect([...readFileSync(join(clone, 'blob.bin'))]).toEqual([0, 123, 123, 0x72, 125, 125]);
   });
 
   it('adds to a branch that exists, from its own head', async () => {
