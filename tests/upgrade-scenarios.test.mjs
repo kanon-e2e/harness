@@ -26,6 +26,9 @@ const load = (id) => {
 };
 const strip = ({ phase: _p, segment: _s, ...step }) => step;
 
+/** The scenarios that burnt in and gate (#43): each turned `gate: true` in its own pull request. */
+const GATED = new Set(['upgrade-previous']);
+
 describe.each(Object.entries(SCENARIOS))('%s', (id, release) => {
   const s = load(id);
   const at = (step) => s.steps.indexOf(step);
@@ -34,8 +37,8 @@ describe.each(Object.entries(SCENARIOS))('%s', (id, release) => {
     expect(validateScenarioDir(s.dir)).toEqual([]);
   });
 
-  it('scenario.json: family upgrade, no model, no Claude, the Author and the Judge, no gate until burn-in', () => {
-    expect(s.scenario).toEqual({ id, family: 'upgrade', tier: 'none', gate: false, apps: ['author', 'judge'], claude: 'none', deadlineMinutes: expect.any(Number) });
+  it('scenario.json: family upgrade, no model, no Claude, the Author and the Judge, gate only once burnt in', () => {
+    expect(s.scenario).toEqual({ id, family: 'upgrade', tier: 'none', gate: GATED.has(id), apps: ['author', 'judge'], claude: 'none', deadlineMinutes: expect.any(Number) });
   });
 
   it(`phase 1, kanon: the full feature with ${release}'s own init, through kanon.at, and the register at the same release`, () => {
