@@ -2,7 +2,7 @@
 
 Kanon's plan 0012 step E6 (harness #41): Kanon's **Review** feature, the review lane alone, with one App. The scenario installs it into a fresh repository the way an adopter does, at the release under test, and checks that doctor then finds the repository healthy, with every Kanon reference in it pinned to the release under test and only it.
 
-`scenario.json`: family `install`, tier `none`, Claude `none`, `judge` as its test Apps (the `review` feature's Apps in the release's `requirements.json`), and `gate: false`. It counts toward the release gate only after burn-in (step E9) and the Owner's decision.
+`scenario.json`: family `install`, tier `none`, Claude `none`, `judge` as its test Apps (the `review` feature's Apps in the release's `requirements.json`), and `gate: true`: it burnt in with ten passes in a row, scheduled or dispatched (Kanon plan 0012 decision 24), so its result counts toward the release gate on every candidate.
 
 ## What the repository holds
 

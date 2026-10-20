@@ -2,7 +2,7 @@
   "id": "install-review",
   "family": "install",
   "tier": "none",
-  "gate": false,
+  "gate": true,
   "apps": ["judge"],
   "claude": "none",
   "deadlineMinutes": 60
