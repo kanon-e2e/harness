@@ -1,0 +1,108 @@
+# The long-lived upgrade signal (Kanon plan 0012 step E14, decision 20). Once a week, and on
+# dispatch, it runs `kanon doctor --json` on the harness's own `main` with the workflow's token,
+# and `runner/upgrade-signal.mjs` asks three things: is the harness pinned to Kanon's latest
+# stable release within seven days of its promotion; is doctor healthy, with only the checks a
+# workflow's token can't run `unchecked`; and did the harness's latest release run go green? A no
+# to any one opens, or keeps open, one issue, `long-lived upgrade behind`, naming which; it is
+# closed when all three hold.
+#
+# Two jobs, as plan 0012 splits a scenario's `kanon` and `act` segments (`K-AGENT-50`, harness
+# #7). `doctor` runs Kanon's code, at the release the harness pins, with read permissions only.
+# `signal` runs the harness's own code alone, and holds `issues: write`. Neither names an
+# environment, a secret or an App key: the workflow's token is the only credential.
+name: upgrade-signal
+
+on:
+  schedule:
+    - cron: '41 6 * * 1'
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: upgrade-signal
+  cancel-in-progress: false
+
+jobs:
+  doctor:
+    name: doctor on main, with the workflow's token
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    # What doctor reads with a workflow's token (Kanon's docs/doctor.md, "The token it needs"):
+    # the repository, its labels and milestones, its runs and their annotations. No write.
+    permissions:
+      actions: read
+      checks: read
+      contents: read
+      issues: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          # Doctor reads the App register's history for the Apps no lane uses any more.
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      - name: Run doctor at the release the harness pins
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # The pattern is built in two pieces, so this line never reads as a Kanon reference to
+          # lane-check, and the grep never matches itself.
+          kanon='yedeya-labs/kanon'
+          pins=$(grep -rhoE "uses:[[:space:]]*${kanon}/[^@[:space:]]+@[^[:space:]#]+" .github | sed 's/.*@//' | sort -u)
+          if [ "$(printf '%s\n' "$pins" | grep -c .)" -ne 1 ] || ! printf '%s' "$pins" | grep -Eq '^(candidate-)?v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error title=upgrade-signal::the harness doesn't pin Kanon to one exact release: $(printf '%s' "$pins" | tr '\n' ' ')"
+            exit 1
+          fi
+          echo "running doctor at $pins"
+          set +e
+          npx --yes --package "github:yedeya-labs/kanon#$pins" kanon doctor --json > "$RUNNER_TEMP/doctor.json" 2> "$RUNNER_TEMP/doctor.log"
+          code=$?
+          set -e
+          echo "doctor exited $code"
+          if ! jq -e . "$RUNNER_TEMP/doctor.json" > /dev/null 2>&1; then
+            echo "doctor's output is not JSON; its log:"
+            tail -n 20 "$RUNNER_TEMP/doctor.log"
+            exit 1
+          fi
+      - name: Keep doctor's document
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: upgrade-signal-doctor
+          path: ${{ runner.temp }}/doctor.json
+          if-no-files-found: ignore
+          retention-days: 30
+          overwrite: true
+
+  signal:
+    name: signal
+    needs: doctor
+    # A doctor job that left no document still signals: `doctor` reads as not healthy.
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      - name: Download doctor's document
+        continue-on-error: true
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: upgrade-signal-doctor
+          path: ${{ runner.temp }}/doctor
+      - name: Open, edit or close the issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DOCTOR_JSON: ${{ runner.temp }}/doctor/doctor.json
+        run: node runner/upgrade-signal.mjs
