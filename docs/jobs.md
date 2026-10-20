@@ -68,7 +68,13 @@ A call to GitHub, by `gh` or by `git`'s clone, fetch, push and ls-remote, that f
 
 *W* × 10 (provision) + ⌈min(*n*, 2) / 2⌉ × 10 (model key) + 3 × *W* × (25 + 35) (each phase's `kanon` and `act` pairs, mint included) + 2 × 5 (`gate-2` and `gate-3`, one job each, not in waves).
 
-The **catalogue's cap** is the largest *n* whose longest running time fits the nightly interval and whose 2*n* repositories (each scenario, and its re-run) fit the hour's 80. That is **14 scenarios**. 14 scenarios take **22 h 30 min**, so a run ends inside the 24 hours before the next nightly. `plan` refuses a catalogue past the cap.
+The **catalogue's cap** is the largest *n* whose longest running time fits the nightly interval and whose 2*n* repositories (each scenario, and its re-run) fit the hour's 80. That is **14 scenarios**. 14 scenarios take **22 h 30 min**, so a run ends inside the 24 hours before the next nightly.
+
+**The cap holds what a run plans, not the catalogue** (the Owner, 2026-10-20; `fitCap` in `runner/plan.mjs`). The catalogue may hold more than 14.
+- **A nightly, a candidate's run, or a dispatch of the whole catalogue** plans every `gate: true` scenario first, then as many `gate: false` ones as fit under the cap.
+- **The rotation is by the UTC day.** The `gate: false` scenarios, sorted by id, are taken in a window as long as the room the gating ones leave, starting at day × room (mod their count). Consecutive days take consecutive windows, so each is planned within ⌈count / room⌉ consecutive days of runs. `plan`'s summary names the ones left out this time. A run that left a scenario out neither counts toward its burn-in nor breaks it.
+- **A dispatch of one scenario or a family** plans what it selects, and is refused only when that selection itself passes the cap.
+- **When the `gate: true` scenarios alone pass the cap,** `plan` fails, as no run could hold the gate. Then the limit must rise, or a scenario must leave the gate.
 
 **The janitor's cut-offs** follow: the longest running time at the cap, plus 100 minutes' margin for queueing, is **24 h 10 min**. A repository with `kanon-e2e-failed` gets 24 hours more, **48 h 10 min**. It runs hourly (`e2e-janitor.yml`). It deletes only repositories with the `kanon-e2e` topic, never the harness. Its run fails, by name, on a repository older than a day that it couldn't delete.
 

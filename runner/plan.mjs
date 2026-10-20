@@ -17,6 +17,14 @@
 // when it is a candidate's), the poll waits for the next tick, and a dispatch stops. A nightly
 // that gave way records no marker, so the next night isn't held by it.
 //
+// THE CAP (runner/sizing.mjs) holds what a run PLANS, not the whole catalogue (the Owner,
+// 2026-10-20). A scheduled run, or a dispatch of the whole catalogue, plans every `gate: true`
+// scenario, then as many `gate: false` ones as fit under the cap, rotating by the day: the
+// `gate: false` scenarios, sorted by id, are taken in a window that moves by its own length each
+// UTC day, so every one runs within ceil(gate: false scenarios / room) consecutive days. A dispatch
+// of a scenario or a family plans what it selects, and is refused only when that selection passes
+// the cap. When the gating scenarios alone pass the cap, `plan` fails, as no run could gate.
+//
 //   node runner/plan.mjs   (reads EVENT, SCHEDULE, RELEASE, SELECT, GITHUB_RUN_ID, GH_TOKEN;
 //                           writes GITHUB_OUTPUT, the step summary and MARKER_DIR/marker.json)
 
@@ -51,13 +59,37 @@ const latest = (releases) => {
   return { stable: top(STABLE), candidate: top(CANDIDATE) };
 };
 
+const DAY_MS = 24 * 60 * 60_000;
+
+/**
+ * What a run plans under the cap: every gating scenario, then a window of the `gate: false` ones,
+ * sorted by id, starting at `day × room` (mod their count), `room` being what the gating ones leave.
+ * Consecutive days take consecutive windows, so each `gate: false` scenario is planned within
+ * ceil(count / room) days. The planned scenarios keep the catalogue's order.
+ * @param {any[]} catalogue @param {number} cap @param {number} day whole UTC days since the epoch
+ * @returns {{ planned: any[], left: string[] }}
+ */
+export function fitCap(catalogue, cap, day) {
+  const gating = catalogue.filter((s) => s.gate === true);
+  if (gating.length > cap) throw new Error(`the catalogue holds ${gating.length} \`gate: true\` scenarios, past the cap of ${cap} a run may hold: one run of them would outlast the nightly interval or the repositories an hour (runner/sizing.mjs)`);
+  const free = catalogue.filter((s) => s.gate !== true).sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  const room = cap - gating.length;
+  if (free.length <= room) return { planned: catalogue, left: [] };
+  const start = (day * room) % free.length;
+  const picked = new Set(Array.from({ length: room }, (_, i) => free[(start + i) % free.length].id));
+  return { planned: catalogue.filter((s) => s.gate === true || picked.has(s.id)), left: free.filter((s) => !picked.has(s.id)).map((s) => s.id) };
+}
+
 /** What a scenario job takes of a scenario, and `verdict` its `gate`, from the catalogue at the run's commit. @param {any} s */
 const entry = (s) => ({ id: s.id, apps: s.apps, claude: s.claude, gate: s.gate === true });
 
-/** @typedef {{ go: boolean, trigger: string, release: string, candidateSha: string, scenarios: any[], modelScenarios: any[], marker: string, reason: string }} Decision */
+/**
+ * `left` is the `gate: false` scenarios the cap left out of this run, by id.
+ * @typedef {{ go: boolean, trigger: string, release: string, candidateSha: string, scenarios: any[], modelScenarios: any[], left: string[], marker: string, reason: string }} Decision
+ */
 
 /** A run that doesn't go ahead. @param {string} trigger @param {string} reason @returns {Decision} */
-const stop = (trigger, reason) => ({ go: false, trigger, release: '', candidateSha: '', scenarios: [], modelScenarios: [], marker: '', reason });
+const stop = (trigger, reason) => ({ go: false, trigger, release: '', candidateSha: '', scenarios: [], modelScenarios: [], left: [], marker: '', reason });
 
 /**
  * Decides the run.
@@ -68,7 +100,6 @@ const stop = (trigger, reason) => ({ go: false, trigger, release: '', candidateS
 export async function decide(input, deps) {
   const ctx = { gh: deps.gh, repository: SETTINGS.harness };
   const cap = maxScenarios();
-  if (input.catalogue.length > cap) throw new Error(`the catalogue holds ${input.catalogue.length} scenarios, past its cap of ${cap}: one run of it would outlast the nightly interval or the repositories an hour (runner/sizing.mjs)`);
 
   const kind = input.event === 'workflow_dispatch' ? 'dispatch'
     : input.event === 'schedule' && input.schedule === SETTINGS.schedules.poll ? 'poll'
@@ -86,6 +117,14 @@ export async function decide(input, deps) {
   } else {
     // A scheduled run holds no real-model scenario until E10 decides how they are scheduled.
     chosen = input.catalogue.filter((s) => s.tier !== 'model');
+  }
+  // THE CAP, on what this run plans.
+  /** @type {string[]} */
+  let left = [];
+  if (kind === 'dispatch' && input.select) {
+    if (chosen.length > cap) throw new Error(`\`${input.select}\` selects ${chosen.length} scenarios, past the cap of ${cap} a run may hold: one run of them would outlast the nightly interval or the repositories an hour (runner/sizing.mjs)`);
+  } else {
+    ({ planned: chosen, left } = fitCap(chosen, cap, Math.floor(deps.now() / DAY_MS)));
   }
   const trigger = kind === 'poll' ? 'candidate' : kind;
   if (!chosen.length) return stop(trigger, 'there is no scenario to run in scenarios/');
@@ -117,7 +156,8 @@ export async function decide(input, deps) {
   const sha = async (/** @type {string} */ ref) => String((await api(ctx, `${K}/commits/${ref}`)).sha);
   const go = (/** @type {Partial<Decision>} */ d) => {
     const scenarios = chosen.map(entry);
-    return /** @type {Decision} */ ({ go: true, trigger, candidateSha: '', scenarios, modelScenarios: scenarios.filter((s) => s.claude === 'subscription'), reason: '', ...d });
+    const note = left.length ? `; the cap of ${cap} leaves out, this time: ${left.join(', ')}` : '';
+    return /** @type {Decision} */ ({ go: true, trigger, candidateSha: '', scenarios, modelScenarios: scenarios.filter((s) => s.claude === 'subscription'), left, ...d, reason: `${d.reason ?? ''}${note}` });
   };
 
   if (kind === 'dispatch') {
