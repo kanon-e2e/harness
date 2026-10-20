@@ -1,0 +1,18 @@
+# Kanon's reusable release workflow, pinned to the release under test. It maps the Releaser's two
+# secrets by name (Kanon's docs/release.md), which the harness writes for a scenario whose `apps`
+# list the Releaser: a release it publishes starts the deploy lane (Kanon plan 0010 §3).
+name: Release
+on:
+  push:
+    branches: [main]
+permissions: {}
+jobs:
+  release:
+    name: Release
+    permissions:
+      contents: write
+      pull-requests: write
+    uses: yedeya-labs/kanon/.github/workflows/release.yml@{{release}}
+    secrets:
+      RELEASER_APP_ID: ${{ secrets.RELEASER_APP_ID }}
+      RELEASER_APP_PRIVATE_KEY: ${{ secrets.RELEASER_APP_PRIVATE_KEY }}

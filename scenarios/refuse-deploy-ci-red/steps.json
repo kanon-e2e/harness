@@ -1,0 +1,53 @@
+{
+  "phases": [
+    {
+      "kanon": [
+        { "verb": "kanon.init", "flags": ["--feature=review", "--review-trigger=labelled", "--no-sensitive-data", "--deploy-environments=staging,production"] },
+        { "verb": "register.write" }
+      ],
+      "act": [
+        { "verb": "files.commit", "from": "kanon", "message": "Install Kanon, with the deploy lane for staging then production" },
+        { "verb": "repo.apply" },
+        { "verb": "environment.create", "name": "staging", "tags": "v*.*.*" },
+        { "verb": "environment.create", "name": "production", "tags": "v*.*.*", "reviewer": true },
+        { "verb": "ruleset.tags", "pattern": "v*.*.*", "bypass": ["releaser"] },
+        { "verb": "run.await", "name": "ci-install", "workflow": "ci.yml", "event": "push", "branch": "main", "deadline": 10 },
+        { "verb": "expect.run", "run": "ci-install", "conclusion": "success", "deadline": 2, "jobs": [
+          { "name": "Lane check", "conclusion": "success" },
+          { "name": "Tests", "conclusion": "success" }
+        ] }
+      ]
+    },
+    {
+      "kanon": [],
+      "act": [
+        { "verb": "files.commit", "from": "scenario", "dir": "regression", "branch": "regression", "message": "feat: a new greeting" },
+        { "verb": "pr.open", "name": "regression", "head": "regression", "title": "feat: a new greeting", "body": "A gate refusal: this change breaks the project's tests, so CI is red on every commit after it, the release's included." },
+        { "verb": "pr.merge", "pr": "regression", "via": "front-door", "deadline": 10 },
+        { "verb": "release.cut", "deadline": 15 }
+      ]
+    },
+    {
+      "kanon": [],
+      "act": [
+        { "verb": "run.await", "name": "ci-release", "workflow": "ci.yml", "event": "push", "branch": "main", "deadline": 5 },
+        { "verb": "expect.run", "run": "ci-release", "conclusion": "failure", "deadline": 1, "jobs": [
+          { "name": "Lane check", "conclusion": "success" },
+          { "name": "Tests", "conclusion": "failure" }
+        ] },
+        { "verb": "run.await", "name": "release", "workflow": "deploy.yml", "event": "release", "branch": "main", "deadline": 10 },
+        { "verb": "expect.run", "run": "release", "conclusion": "failure", "deadline": 1, "jobs": [
+          { "name": "release / gate", "conclusion": "failure" },
+          { "name": "release / probe", "conclusion": "skipped" },
+          { "name": "release / build", "conclusion": "skipped" },
+          { "name": "release / record", "conclusion": "success" },
+          { "name": "release / report", "conclusion": "success" },
+          { "name": "staging", "conclusion": "skipped" },
+          { "name": "production", "conclusion": "skipped" }
+        ] },
+        { "verb": "issue.await", "name": "staging-refused", "author": "github-actions", "labels": ["bug", "sev:medium"], "deadline": 5 },
+        { "verb": "expect.issue", "issue": "staging-refused", "state": "open", "labels": ["bug", "sev:medium"], "author": "github-actions", "deadline": 1 }
+      ]
+    }
+  ]
+}

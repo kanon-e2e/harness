@@ -1,0 +1,9 @@
+{
+  "id": "refuse-review-label",
+  "family": "lane",
+  "tier": "none",
+  "gate": false,
+  "apps": ["judge"],
+  "claude": "none",
+  "deadlineMinutes": 60
+}

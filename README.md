@@ -122,6 +122,18 @@ Dispatch the family:
 gh workflow run e2e.yml -R kanon-e2e/harness -f release=<candidate> -f select=lane
 ```
 
+**The gate refusals** (plan 0012 step E12, no model, `gate: false` until burn-in). Each one puts one of the lanes' own admission rules in front of a real event the rule must refuse. It then expects the refusal concretely: which jobs ran, which were skipped, and what was filed.
+
+- **`refuse-review-label`** ([`refuse-review-label/`](scenarios/refuse-review-label/README.md), family `lane`, `gate: false`). A label applied by an identity outside the App register starts nothing. After `install-review`'s clean install, the driver App, which no register row names, labels a pull request `review:please`. The review lane's run must succeed with `review / filter` `success`, and with `review / review` and `review / notify-unlabeled` `skipped`.
+- **`refuse-deploy-ci-red`** ([`refuse-deploy-ci-red/`](scenarios/refuse-deploy-ci-red/README.md), family `deploy`, `gate: false`). Plan 0010's deploy gate refuses a release whose CI is red (`ci-red`, `K-SHIP-8`). The scenario takes the rehearsal's install, with the project's own tests in `ci.yml`, merges a change that breaks them, and cuts one release. CI on the release's commit must be red. The deploy run must stop at `release / gate`, with nothing built or deployed and staging's issue filed.
+
+The Merger's refusal of a pull request with no verdict has no scenario. Every event the harness makes is the driver App's, and the Merger's membership gate refuses that before it reads a verdict ([`scenarios/README.md`](scenarios/README.md)). `select=lane` also picks up the `lane-check` family, and `select=deploy` the rehearsal, so dispatch these one at a time:
+
+```sh
+gh workflow run e2e.yml -R kanon-e2e/harness -f release=<candidate> -f select=refuse-review-label
+gh workflow run e2e.yml -R kanon-e2e/harness -f release=<candidate> -f select=refuse-deploy-ci-red
+```
+
 ## Runs
 
 **A scenario's life** (plan 0012 §5.1). `provision` creates a fresh public repository, `e2e-<scenario>-<run>-<attempt>`, empty, with the scenario's test Apps' secrets and the `kanon-e2e` topic. Each phase is then a `kanon` job, which runs Kanon's code at the release under test in a clone with a read-only token and writes nothing to GitHub, and an `act` job, which pushes what Kanon wrote and does the rest with the harness's own code. The first `act` job lays `start/` as the repository's first commit. The `act` job that learns the result ends the repository. [`docs/jobs.md`](docs/jobs.md) lists every job, which secret each holds and why, and the sizing.
@@ -167,6 +179,13 @@ gh workflow run e2e.yml -R kanon-e2e/harness -f release=<candidate> -f select=la
 - `tests/upgrade-scenarios.test.mjs` holds the two upgrade scenarios to their issue's acceptance criteria (#42): each `scenario.json`, the install at the older release through `kanon.at` and `register.write`'s `release`, the upgrade's steps in order, the merge through a pull request, the end of bootstrap after it (#59), and the final doctor held to `{{release}}` with no `pin.mixed`.
 - `tests/doctor-scenarios.test.mjs` holds the three doctor-broken scenarios to their issue's acceptance criteria (E12): each `scenario.json` with `gate: false`, each one `install-review`'s steps less or plus only its break, the final doctor held to `findings`, exit 1, only `secrets` unchecked and exactly its one blocking finding, and `doctor-id-token`'s `Publish` workflow. It also holds E12's mutation: each scenario's own `expect.doctor` step passes on the document its break makes, and fails on the clean install's document, on a copy expecting a finding doctor doesn't report or the install's `incomplete`, on a second blocking finding, and on the break reported as not blocking.
 - `tests/lane-check-scenarios.test.mjs` holds the three lane-check scenarios to E12's criteria. It also runs E12's mutation: a copy expecting `Lane check` green on the breakage, a lane-check without the broken rule, and a correct pull request holding the breakage each read `fail`.
+- `tests/refuse-scenarios.test.mjs` holds the gate refusals to their issue's acceptance criteria (E12):
+  - each `scenario.json` with `gate: false`;
+  - `refuse-review-label`'s phase 1 as `install-review`'s, with its label applied in an `act` segment;
+  - `refuse-deploy-ci-red`'s install as the rehearsal's, with the project's tests in `ci.yml`;
+  - each refusal's expected jobs and issue.
+
+  It also holds E12's mutation: each scenario's own expectation steps pass on the refused run, and fail on the run an admitted event makes and on copies that expect the event to be admitted.
 - `tests/workflows.test.mjs` holds the harness's workflows to plan 0012 §5.2: no job that holds an App key runs someone else's code, each environment is named only by the jobs §5.2 lists and the probes, no `-job` workflow names a private key, no workflow runs on a pull-request event with a secret, other than those Kanon's own lane callers map by name into their lane, and `e2e.yml`'s `verdict` holds `issues: write` through its workflow token and no key.
 - `tests/e2e-workflows.test.mjs` holds `e2e.yml` and its pairs to plan 0012 §5.2: the jobs, their order and conditions, each pair's mint and token, the read-only `kanon` token, an `act` job that runs no Kanon code, and every matrix's max-parallel and every job's timeout held to `runner/settings.json`.
 - `tests/runner.test.mjs` tests the runner a segment at a time on a stubbed `gh` and `npx` and a real `git`, each `git` call stubbable: pass, fail and infra, the retries of `gh` and `git`, the state, and how the repository ends.

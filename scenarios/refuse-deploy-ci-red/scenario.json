@@ -1,0 +1,9 @@
+{
+  "id": "refuse-deploy-ci-red",
+  "family": "deploy",
+  "tier": "none",
+  "gate": false,
+  "apps": ["judge", "releaser"],
+  "claude": "none",
+  "deadlineMinutes": 75
+}

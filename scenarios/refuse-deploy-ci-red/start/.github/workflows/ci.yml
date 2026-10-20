@@ -1,0 +1,30 @@
+# The project's CI (K-LAYOUT-18), as an adopter keeps it: Kanon's lane check, written as `kanon
+# init` writes it, beside the project's own tests. `init` keeps a ci.yml the repository has, and
+# the deploy lane's gate reads this file's push run on the release's commit (K-SHIP-8).
+name: CI
+
+on:
+  pull_request:
+  merge_group:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  lanes:
+    name: Lane check
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - uses: yedeya-labs/kanon/actions/lane-check@{{release}}
+  tests:
+    name: Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - name: Run the project's tests
+        run: sh test.sh
