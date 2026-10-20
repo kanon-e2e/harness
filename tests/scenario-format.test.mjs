@@ -312,6 +312,12 @@ describe('expectations read a field, a finding id or a known marker, never prose
   it('refuses a finding id or an unchecked check that isn\'t an id', () => {
     expect(stepErrors({ verb: 'expect.doctor', findings: ['The ruleset is missing'] }).join('\n')).toMatch(/finding id/);
     expect(stepErrors({ verb: 'expect.doctor', unchecked: ['the secrets'] }).join('\n')).toMatch(/unchecked/);
+    expect(stepErrors({ verb: 'expect.doctor', blocking: ['The ruleset lacks a rule'] }).join('\n')).toMatch(/blocking.*finding id|finding id/s);
+    expect(stepErrors({ verb: 'expect.init', blocking: ['ruleset.missing'] }).join('\n')).toMatch(/blocking/);
+  });
+
+  it('accepts a doctor-broken expectation: findings, exit 1, `secrets` unchecked, and exactly one blocking finding id (E12)', () => {
+    expect(stepErrors({ verb: 'expect.doctor', status: 'findings', exitCode: 1, unchecked: ['secrets'], findings: ['ruleset.rule-missing'], blocking: ['ruleset.rule-missing'] }, 'kanon')).toEqual([]);
   });
 
   it('refuses a pointer that isn\'t one, and a value that is an object, which could carry free text', () => {

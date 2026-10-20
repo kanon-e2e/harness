@@ -1,0 +1,11 @@
+{
+  "id": "doctor-id-token",
+  "family": "doctor",
+  "tier": "none",
+  "gate": false,
+  "apps": [
+    "judge"
+  ],
+  "claude": "none",
+  "deadlineMinutes": 60
+}

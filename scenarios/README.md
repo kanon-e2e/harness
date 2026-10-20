@@ -1,6 +1,6 @@
 # Scenarios
 
-Kanon's plan 0012 §4 makes a scenario data: a directory here, `scenarios/<scenario>/`, holding `scenario.json`, a `start/` tree and `steps.json`. [The harness's README](../README.md#scenarios) describes the format. This file lists the step vocabulary a `steps.json` is written in. The validator (`runner/validate.mjs`) refuses a scenario that breaks a rule of either, and the runner reads scenarios only through it. The scenarios themselves are listed in [the harness's README](../README.md#the-catalogue), and each has a README of its own: the first is [`deploy-rehearsal/`](deploy-rehearsal/README.md), plan 0012's step E5, step E6 adds the install family: [`install-review/`](install-review/README.md), [`install-build/`](install-build/README.md), [`install-full/`](install-full/README.md) and [`install-python/`](install-python/README.md), and step E7 the upgrade family: [`upgrade-previous/`](upgrade-previous/README.md) and [`upgrade-previous-1/`](upgrade-previous-1/README.md).
+Kanon's plan 0012 §4 makes a scenario data: a directory here, `scenarios/<scenario>/`, holding `scenario.json`, a `start/` tree and `steps.json`. [The harness's README](../README.md#scenarios) describes the format. This file lists the step vocabulary a `steps.json` is written in. The validator (`runner/validate.mjs`) refuses a scenario that breaks a rule of either, and the runner reads scenarios only through it. The scenarios themselves are listed in [the harness's README](../README.md#the-catalogue), and each has a README of its own: the first is [`deploy-rehearsal/`](deploy-rehearsal/README.md), plan 0012's step E5, step E6 adds the install family: [`install-review/`](install-review/README.md), [`install-build/`](install-build/README.md), [`install-full/`](install-full/README.md) and [`install-python/`](install-python/README.md), step E7 the upgrade family: [`upgrade-previous/`](upgrade-previous/README.md) and [`upgrade-previous-1/`](upgrade-previous-1/README.md), and step E12 the doctor-broken family: [`doctor-ruleset-rule/`](doctor-ruleset-rule/README.md), [`doctor-approval-off/`](doctor-approval-off/README.md) and [`doctor-id-token/`](doctor-id-token/README.md).
 
 ## The rules every verb keeps
 
@@ -42,7 +42,7 @@ A step is an object: `verb`, then the verb's arguments. A step's `name` is the n
 | `run.await` | Waits for a `workflow`'s run on an `event` and a commit (a `branch`'s head or a `pr`'s) to complete, and keeps it. | `either` | yes |
 | `issue.await` | Waits for an issue no step opened, one a workflow under test files, by its `author` (an App's slug, `github-actions` for the workflow token) and its `labels`, never its title or body, and keeps the newest under `name` for `expect.issue`. | `either` | yes |
 | `expect.init` | Holds the kept `init` document to a `status`, an `exitCode`, finding ids present (`findings`) and `absent`, and `fields` by pointer. A `fields` entry's `equals` may hold `{{release}}`. | `either` | no |
-| `expect.doctor` | Holds the kept doctor document as `expect.init` does, and to the `unchecked` checks it allows: any other `unchecked` check fails it. | `either` | no |
+| `expect.doctor` | Holds the kept doctor document as `expect.init` does, and to the `unchecked` checks it allows: any other `unchecked` check fails it. With `blocking`, a list of finding ids, the findings whose `blocking` field is `true` must be exactly those ids: one more that blocks fails it, and so does a listed id reported as not blocking or not at all. `blocking: []` allows no blocking finding. A finding that blocks nothing is not counted. | `either` | no |
 | `expect.run` | Holds a kept run to its `conclusion`, and its `jobs`, by name, to theirs. | `either` | yes |
 | `expect.check` | Holds a commit's check run, or else its status, of a `name` to a `conclusion`. | `either` | yes |
 | `expect.issue` | Holds an issue to its `state`, `labels`, `labelsAbsent`, `author` (an App's slug), and a known `marker` in a post, optionally `markerBy` an App. | `either` | yes |
@@ -77,3 +77,9 @@ The `kanon` job's token is read-only (decision 23 (b)). On it, doctor can't list
 ```
 
 Any other check `unchecked` fails that expectation, so "incomplete" can't pass for "healthy".
+
+A doctor-broken scenario (plan 0012 §6.1) breaks one thing on purpose, and expects exactly that finding id, and no other blocking one. Doctor then exits 1 (`findings`), not 4: a blocking finding outranks a check that couldn't run, and `secrets` is still the one allowed `unchecked`. `blocking` holds the document to that one blocking finding, whatever finding that blocks nothing it also reports:
+
+```json
+{ "verb": "expect.doctor", "status": "findings", "exitCode": 1, "unchecked": ["secrets"], "findings": ["ruleset.rule-missing"], "blocking": ["ruleset.rule-missing"] }
+```

@@ -51,6 +51,24 @@ describe('expect.doctor', () => {
     await expect(run('expect.doctor', { exitCode: 1 }, context({ state: doctor(doc, 0) }))).rejects.toMatchObject(failsWith(/exit code/));
   });
 
+  it('holds the blocking findings to exactly the `blocking` ids, by each finding\'s `id` and `blocking` fields (E12)', async () => {
+    const f = (id, blocking) => ({ id, blocking, message: 'prose' });
+    const doc = { ...PROBE_19, status: 'findings', exitCode: 1, findings: [f('pin.candidate', false), f('ruleset.rule-missing', true), f('ruleset.rule-missing', true)] };
+    await run('expect.doctor', { unchecked: ['secrets'], blocking: ['ruleset.rule-missing'] }, context({ state: doctor(doc) }));
+    for (const [findings, re] of [
+      [[...doc.findings, f('caller.grant-missing', true)], /`caller\.grant-missing` blocks/],
+      [[f('ruleset.rule-missing', false)], /`ruleset\.rule-missing`: expected blocking, reported as not blocking/],
+      [[f('pin.candidate', false)], /`ruleset\.rule-missing`: expected blocking, not reported/],
+    ]) await expect(run('expect.doctor', { unchecked: ['secrets'], blocking: ['ruleset.rule-missing'] }, context({ state: doctor({ ...doc, findings }) }))).rejects.toMatchObject(failsWith(re));
+  });
+
+  it('`blocking: []` holds a document to no blocking finding, whatever blocks nothing', async () => {
+    const doc = { ...PROBE_19, findings: [{ id: 'pin.candidate', blocking: false, message: 'm' }] };
+    await run('expect.doctor', { unchecked: ['secrets'], blocking: [] }, context({ state: doctor(doc) }));
+    const blocked = { ...doc, findings: [...doc.findings, { id: 'ruleset.missing', blocking: true, message: 'm' }] };
+    await expect(run('expect.doctor', { unchecked: ['secrets'], blocking: [] }, context({ state: doctor(blocked) }))).rejects.toMatchObject(failsWith(/`ruleset\.missing` blocks/));
+  });
+
   it('holds a field at a pointer', async () => {
     await run('expect.doctor', { unchecked: ['secrets'], fields: [{ pointer: '/releases/pinned', equals: RELEASE }] }, context({ state: doctor(PROBE_19) }));
     await expect(run('expect.doctor', { unchecked: ['secrets'], fields: [{ pointer: '/releases/pinned', equals: 'v0.40.0' }] }, context({ state: doctor(PROBE_19) }))).rejects.toMatchObject(failsWith(/\/releases\/pinned/));
