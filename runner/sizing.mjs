@@ -10,9 +10,11 @@
 //
 // A job that `needs:` a matrix waits for all of its entries, so with fewer entries at once than
 // scenarios every stage runs in waves, and a repository lives from its `provision` to the last
-// wave of `act-3`. The catalogue's cap is the largest that fits both limits; `plan` refuses a run
-// past it, so the longest running time below is a bound on every run, and the janitor's cut-offs
-// follow it.
+// wave of `act-3`. The cap is the largest run that fits both limits. It holds what a run plans,
+// not the catalogue (the Owner, 2026-10-20): `plan` plans every `gate: true` scenario, then as many
+// `gate: false` ones as fit, rotating by the day (`fitCap` in runner/plan.mjs), and refuses a
+// dispatch whose selection passes it. So the longest running time below is a bound on every run,
+// and the janitor's cut-offs follow it.
 
 import { readFileSync } from 'node:fs';
 
@@ -64,7 +66,7 @@ export const longestRunningMinutes = (n, s = SETTINGS) => {
 export const repositoriesOf = (n) => 2 * n;
 
 /**
- * The catalogue's cap: the most scenarios one run may hold, so that its longest running time fits
+ * The cap: the most scenarios one run may plan, so that its longest running time fits
  * the nightly interval and its repositories fit the repositories an hour.
  * @param {typeof SETTINGS} s
  */

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { decide } from '../runner/plan.mjs';
+import { decide, fitCap } from '../runner/plan.mjs';
+import { maxScenarios } from '../runner/sizing.mjs';
 import { SETTINGS } from '../runner/sizing.mjs';
 import { fail, stubGh } from './helpers/stubs.mjs';
 
@@ -199,12 +200,85 @@ describe('the catalogue', () => {
     expect(await plan({ event: 'schedule', schedule: NIGHTLY, catalogue: [] }, world())).toMatchObject({ go: false, reason: expect.stringMatching(/no scenario/) });
   });
 
-  it('refuses a run past the catalogue\'s cap, so a run always ends inside the nightly interval', async () => {
-    const many = Array.from({ length: 15 }, (_, i) => ({ ...CATALOGUE[1], id: `s-${i}` }));
-    await expect(plan({ event: 'schedule', schedule: NIGHTLY, catalogue: many }, world())).rejects.toThrow(/14/);
-  });
-
   it('reads Kanon only through its public API; an error reading it fails `plan`, never a run', async () => {
     await expect(poll({ ...world(), [`GET ${K}/releases?per_page=100`]: fail('HTTP 404') })).rejects.toThrow();
+  });
+});
+
+describe('the cap holds what a run plans, gating scenarios first (the Owner, 2026-10-20)', () => {
+  const CAP = maxScenarios();
+  const DAY = 24 * 60 * 60_000;
+  const sc = (id, gate) => ({ ...CATALOGUE[1], id, gate });
+  /** 6 gating and 12 `gate: false` scenarios: 18, past the cap of 14, leaving room for 8. */
+  const gating = Array.from({ length: 6 }, (_, i) => sc(`g-${i}`, true));
+  const free = Array.from({ length: 12 }, (_, i) => sc(`f-${String(i).padStart(2, '0')}`, false));
+  const big = [...free.slice(0, 6), ...gating, ...free.slice(6)];
+  const ids = (out) => out.scenarios.map((s) => s.id);
+  const at = (days) => () => NOW + days * DAY;
+  const planAt = (days, input, routes) => {
+    const g = stubGh(routes);
+    return decide({ catalogue: big, runId: '999', release: '', select: '', schedule: '', ...input }, { gh: g.gh, now: at(days) });
+  };
+
+  it('a catalogue past the cap no longer fails the run: the nightly and the poll plan exactly the cap', async () => {
+    expect(big.length).toBeGreaterThan(CAP);
+    for (const input of [{ event: 'schedule', schedule: NIGHTLY }, { event: 'schedule', schedule: POLL }]) {
+      const out = await planAt(0, input, world());
+      expect(out.go).toBe(true);
+      expect(out.scenarios).toHaveLength(CAP);
+      expect(out.left).toHaveLength(big.length - CAP);
+      expect(out.reason).toMatch(/the cap of 14 leaves out, this time: f-/);
+    }
+  });
+
+  // MUTATION: a plan that drops a gating scenario to fit turns this red.
+  it('MUTATION: every gating scenario is planned on every day, whatever the rotation', async () => {
+    for (let day = 0; day < 10; day++) {
+      const out = await planAt(day, { event: 'schedule', schedule: NIGHTLY }, world());
+      for (const g of gating) expect(ids(out), `day ${day}`).toContain(g.id);
+      expect(out.left.every((id) => id.startsWith('f-')), `day ${day}`).toBe(true);
+    }
+  });
+
+  it('rotates the `gate: false` ones: each is planned within ceil(12 / 8) = 2 consecutive days, from any day', async () => {
+    for (let first = 0; first < 5; first++) {
+      const seen = new Set();
+      for (let day = first; day < first + 2; day++) for (const id of ids(await planAt(day, { event: 'schedule', schedule: NIGHTLY }, world()))) seen.add(id);
+      for (const f of free) expect(seen.has(f.id), `${f.id} from day ${first}`).toBe(true);
+    }
+  });
+
+  it('keeps the catalogue\'s order, and plans everything when it fits', () => {
+    const { planned } = fitCap(big, CAP, 3);
+    expect(planned.map((s) => s.id)).toEqual(big.map((s) => s.id).filter((id) => planned.some((s) => s.id === id)));
+    expect(fitCap(big.slice(0, CAP), CAP, 3)).toEqual({ planned: big.slice(0, CAP), left: [] });
+  });
+
+  it('a dispatch of the whole catalogue rotates as a scheduled run does', async () => {
+    const out = await planAt(0, { event: 'workflow_dispatch', release: 'candidate-v0.42.0' }, world());
+    expect(out).toMatchObject({ go: true, trigger: 'candidate' });
+    expect(out.scenarios).toHaveLength(CAP);
+  });
+
+  it('a dispatch plans what it selects, and is refused only when the selection itself passes the cap', async () => {
+    const family = await planAt(0, { event: 'workflow_dispatch', release: 'v0.41.0', select: 'install' }, world()).catch((e) => e);
+    expect(family.message).toMatch(/`install` selects 18 scenarios, past the cap of 14/);
+    const one = await planAt(0, { event: 'workflow_dispatch', release: 'v0.41.0', select: 'f-03' }, world());
+    expect(one).toMatchObject({ go: true, left: [] });
+    expect(ids(one)).toEqual(['f-03']);
+  });
+
+  it('fails as before when the gating scenarios alone pass the cap', async () => {
+    const all = Array.from({ length: CAP + 1 }, (_, i) => sc(`g-${i}`, true));
+    await expect(plan({ event: 'schedule', schedule: NIGHTLY, catalogue: all }, world())).rejects.toThrow(/15 `gate: true` scenarios, past the cap of 14/);
+  });
+
+  it('the real catalogue under scenarios/ plans on a nightly, today', async () => {
+    const { scenarioDirs, loadScenario } = await import('../runner/validate.mjs');
+    const catalogue = scenarioDirs().map((d) => loadScenario(d).scenario);
+    const out = await plan({ event: 'schedule', schedule: NIGHTLY, catalogue }, world());
+    expect(out.go).toBe(true);
+    expect(out.scenarios.length).toBeLessThanOrEqual(CAP);
+    for (const g of catalogue.filter((s) => s.gate === true)) expect(ids(out)).toContain(g.id);
   });
 });
