@@ -184,8 +184,8 @@ describe('no `-job` workflow names a private key', () => {
 describe('`e2e.yml`\'s `verdict` files issues with its workflow token, and holds no key (E8, #40)', () => {
   const verdict = docs['e2e.yml'].jobs.verdict;
 
-  it('has `issues: write` on this repository and `contents: read`, nothing more', () => {
-    expect(verdict.permissions).toEqual({ contents: 'read', issues: 'write' });
+  it('has `issues: write` on this repository, `contents: read`, and `actions: read` for the run\'s jobs list (#24), nothing more', () => {
+    expect(verdict.permissions).toEqual({ actions: 'read', contents: 'read', issues: 'write' });
   });
 
   it('its only token is the workflow\'s own: no environment, no secret, no key, no App token', () => {

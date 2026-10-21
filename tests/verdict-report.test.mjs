@@ -2,7 +2,8 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { give, judge, REPORTER_TITLE, redTitle, withSkipped } from '../runner/verdict.mjs';
+import { RESULT_STEPS, actJob } from '../runner/evidence.mjs';
+import { attest, give, judge, REPORTER_TITLE, redTitle, withSkipped } from '../runner/verdict.mjs';
 import { describeCall, tempDir, writeTree } from './helpers/stubs.mjs';
 import { readWorkflows } from './helpers/workflows.mjs';
 
@@ -23,6 +24,10 @@ const result = (scenario, r, more = {}) => ({ schema: 'kanon-e2e-result/v1', sce
 const gating = (...ids) => ids.map((id) => ({ id, gate: true }));
 const free = (...ids) => ids.map((id) => ({ id, gate: false }));
 const run = (id = '39117109753', attempt = '1') => ({ id, attempt, url: `https://github.com/${H}/actions/runs/${id}` });
+/** An `act` job of `scenario`'s in the run's jobs list that finalized it with `r`: its one result step ran, the others were skipped. */
+const actOf = (scenario, r, { phase = 1, conclusion = 'success' } = {}) => ({
+  name: actJob(phase, scenario), conclusion, steps: ['pass', 'fail', 'infra'].map((x) => ({ name: RESULT_STEPS[x], conclusion: x === r ? 'success' : 'skipped' })),
+});
 
 describe('verdict: the scenarios that count, and pass, fail or infra-only', () => {
   it('on a candidate\'s run, passes only when every scenario with `gate: true` read `pass`; a `gate: false` one is listed with its result and changes nothing', () => {
@@ -137,6 +142,38 @@ const candidateRun = (over = {}) => ({
 });
 const kept = (scenario, message) => result(scenario, 'fail', {
   repository: `kanon-e2e/e2e-${scenario}-39117109753-1`, repositoryAction: 'kept', firstFailure: { phase: 2, segment: 'act', index: 3, verb: 'expect.run', message },
+});
+
+describe('attest(): each planned scenario\'s result as the run\'s jobs list records it (#24, R3)', () => {
+  it('takes the result the scenario\'s finalizing `act` job recorded, over what any artifact says', () => {
+    expect(attest(free('a', 'b', 'c'), [result('a', 'pass'), result('b', 'pass')], [actOf('a', 'pass'), actOf('b', 'fail'), actOf('c', 'infra', { phase: 2 })]).map((r) => [r.scenario, r.result]))
+      .toEqual([['a', 'pass'], ['b', 'fail'], ['c', 'infra']]);
+  });
+
+  it('keeps the artifact\'s details only when it agrees with the jobs list', () => {
+    const a = result('a', 'fail', { firstFailure: { message: 'x' } });
+    expect(attest(free('a'), [a], [actOf('a', 'fail')])).toEqual([a]);
+    expect(attest(free('a'), [result('a', 'pass', { firstFailure: null })], [actOf('a', 'fail')])).toEqual([{ schema: 'kanon-e2e-result/v1', scenario: 'a', result: 'fail' }]);
+  });
+
+  it('a `pass` with no recorded result, or one R3 holds back, reads `unconfirmed`, never `pass`', () => {
+    expect(attest(free('a'), [result('a', 'pass')], [])).toEqual([{ schema: 'kanon-e2e-result/v1', scenario: 'a', result: 'unconfirmed', unconfirmed: expect.stringMatching(/no `act` job/) }]);
+    expect(attest(free('a'), [result('a', 'pass')], [actOf('a', 'pass', { conclusion: 'failure' })])[0]).toMatchObject({ result: 'unconfirmed', unconfirmed: expect.stringMatching(/concluded failure/) });
+    expect(attest(free('a'), [result('a', 'pass')], null)[0]).toMatchObject({ result: 'unconfirmed', unconfirmed: expect.stringMatching(/jobs list/) });
+  });
+
+  it('an artifact\'s `fail` or `infra` with no recorded result stands: it can only hold a scenario back', () => {
+    expect(attest(free('a', 'b'), [result('a', 'fail'), result('b', 'infra')], []).map((r) => r.result)).toEqual(['fail', 'infra']);
+  });
+
+  it('never takes `unconfirmed` from an artifact, and reads nothing for an unplanned scenario', () => {
+    expect(attest(free('a'), [result('a', 'unconfirmed', { unconfirmed: '@someone' }), result('x', 'pass')], [])).toEqual([]);
+  });
+
+  it('`judge` reads an `unconfirmed` scenario as no pass: `infra-only`, unless another failed', () => {
+    const v = judge({ planned: free('a', 'b'), results: attest(free('a', 'b'), [result('a', 'pass'), result('b', 'pass')], [actOf('b', 'pass')]), startResult: 'skipped' });
+    expect(v).toMatchObject({ verdict: 'infra-only', scenarios: [{ id: 'a', result: 'unconfirmed', unconfirmed: expect.any(String) }, { id: 'b', result: 'pass' }] });
+  });
 });
 
 describe('verdict on a candidate\'s run: the red issue (§8.3)', () => {
@@ -346,6 +383,7 @@ const method = i >= 0 ? args[i + 1] : 'GET';
 const path = args.filter((a, j) => j > 0 && !a.startsWith('-') && args[j - 1] !== '-X' && args[j - 1] !== '--input').pop();
 const body = args.includes('--input') ? JSON.parse(fs.readFileSync(0, 'utf8')) : undefined;
 if (method === 'GET' && path.startsWith('repos/${H}/issues?')) { process.stdout.write(JSON.stringify([store.filter((x) => x.state === 'open')])); process.exit(0); }
+if (method === 'GET' && path === 'repos/${H}/actions/runs/39117109753/attempts/1/jobs?per_page=100') { if (!process.env.JOBS_FILE) { process.stderr.write('HTTP 404'); process.exit(1); } process.stdout.write(JSON.stringify([{ jobs: JSON.parse(fs.readFileSync(process.env.JOBS_FILE, 'utf8')) }])); process.exit(0); }
 if (method === 'POST') { const n = store.length + 1; const x = { number: n, state: 'open', user: { login: 'github-actions[bot]', type: 'Bot' }, ...body, html_url: 'https://github.com/${H}/issues/' + n }; store.push(x); save(); process.stdout.write(JSON.stringify(x)); process.exit(0); }
 if (method === 'PATCH') { const x = store.find((y) => y.number === Number(path.split('/').pop())); Object.assign(x, body); save(); process.stdout.write(JSON.stringify(x)); process.exit(0); }
 process.stderr.write('no route'); process.exit(1);
@@ -364,10 +402,13 @@ process.stderr.write('no route'); process.exit(1);
     if (!env.issues) writeFileSync(issues, '[]');
     const output = join(dir, 'output');
     writeFileSync(output, '');
+    // The run's jobs list: by default, each result's own `act` job recorded it, as an honest run's does.
+    const jobs = env.jobs !== undefined ? env.jobs : (env.results ?? []).filter((r) => ['pass', 'fail', 'infra'].includes(r.result)).map((r) => actOf(r.scenario, r.result));
+    if (jobs) writeFileSync(join(dir, 'jobs.json'), JSON.stringify(jobs));
     const planned = env.planned.map((p) => (typeof p === 'string' ? { id: p, gate: false } : p)).map((p) => ({ ...p, apps: [], claude: 'none' }));
     const r = spawnSync(process.execPath, ['runner/verdict.mjs'], {
       env: {
-        ...process.env, PATH: `${join(dir, 'bin')}:${process.env.PATH}`, ISSUES_FILE: issues, START_RESULT: env.start ?? 'success', SCENARIOS: JSON.stringify(planned), RESULTS_DIR: results, OUT: join(dir, 'out'), GITHUB_OUTPUT: output,
+        ...process.env, PATH: `${join(dir, 'bin')}:${process.env.PATH}`, ISSUES_FILE: issues, ...(jobs ? { JOBS_FILE: join(dir, 'jobs.json') } : {}), START_RESULT: env.start ?? 'success', SCENARIOS: JSON.stringify(planned), RESULTS_DIR: results, OUT: join(dir, 'out'), GITHUB_OUTPUT: output,
         TRIGGER: env.trigger ?? 'dispatch', RELEASE: env.release ?? 'v0.40.2', CANDIDATE_SHA: env.sha ?? '', GITHUB_RUN_ID: '39117109753', GITHUB_RUN_ATTEMPT: '1', GITHUB_SERVER_URL: 'https://github.com', GITHUB_REPOSITORY: H,
       },
       encoding: 'utf8',
@@ -389,15 +430,34 @@ process.stderr.write('no route'); process.exit(1);
   it('counts a result only from where an `act` job puts it: its own artifact\'s `result.json`, for its own scenario', () => {
     const pass = (scenario) => JSON.stringify(result(scenario, 'pass'));
     const ids = (v) => v.scenarios.map(({ id, result: r }) => ({ id, result: r }));
+    // `a`'s own `act` job recorded the pass its artifact reads; no job recorded one for `b` or `c`.
+    const jobs = [actOf('a', 'pass')];
     // Several matches: an artifact's result counts only for the scenario its name gives.
-    expect(ids(cli({ planned: ['a', 'b'], artifacts: [{ name: 'kanon-e2e-result-a', files: { 'result.json': pass('b') } }, { name: 'kanon-e2e-result-x', files: { 'result.json': pass('a') } }] }).verdict)).toEqual([{ id: 'a', result: 'missing' }, { id: 'b', result: 'missing' }]);
+    expect(ids(cli({ planned: ['a', 'b'], jobs: [], artifacts: [{ name: 'kanon-e2e-result-a', files: { 'result.json': pass('b') } }, { name: 'kanon-e2e-result-x', files: { 'result.json': pass('a') } }] }).verdict)).toEqual([{ id: 'a', result: 'missing' }, { id: 'b', result: 'missing' }]);
     // A result nested deeper in an artifact, or under another name, is not one.
-    expect(ids(cli({ planned: ['a', 'b'], artifacts: [{ name: 'kanon-e2e-result-a', files: { 'result.json': pass('a'), 'kanon-e2e-result-b/result.json': pass('b') } }, { name: 'kanon-e2e-result-c', files: { 'result.json': pass('c') } }] }).verdict)).toEqual([{ id: 'a', result: 'pass' }, { id: 'b', result: 'missing' }]);
+    expect(ids(cli({ planned: ['a', 'b'], jobs, artifacts: [{ name: 'kanon-e2e-result-a', files: { 'result.json': pass('a'), 'kanon-e2e-result-b/result.json': pass('b') } }, { name: 'kanon-e2e-result-c', files: { 'result.json': pass('c') } }] }).verdict)).toEqual([{ id: 'a', result: 'pass' }, { id: 'b', result: 'missing' }]);
     // One match: the one artifact gives one result, its `result.json`, and nothing else it holds counts.
-    expect(cli({ planned: ['a', 'b'], artifacts: [{ name: 'kanon-e2e-result-a', files: { 'result.json': pass('a'), 'kanon-e2e-result-b/result.json': pass('b') } }] })).toMatchObject({ status: 1, verdict: { verdict: 'infra-only', scenarios: [{ id: 'a', result: 'pass' }, { id: 'b', result: 'missing' }] } });
-    expect(ids(cli({ planned: ['a', 'b'], artifacts: [{ name: 'kanon-e2e-result-a', files: { 'result.json': 'not json', 'kanon-e2e-result-b/result.json': pass('b') } }] }).verdict)).toEqual([{ id: 'a', result: 'missing' }, { id: 'b', result: 'missing' }]);
+    expect(cli({ planned: ['a', 'b'], jobs, artifacts: [{ name: 'kanon-e2e-result-a', files: { 'result.json': pass('a'), 'kanon-e2e-result-b/result.json': pass('b') } }] })).toMatchObject({ status: 1, verdict: { verdict: 'infra-only', scenarios: [{ id: 'a', result: 'pass' }, { id: 'b', result: 'missing' }] } });
+    expect(ids(cli({ planned: ['a', 'b'], jobs: [], artifacts: [{ name: 'kanon-e2e-result-a', files: { 'result.json': 'not json', 'kanon-e2e-result-b/result.json': pass('b') } }] }).verdict)).toEqual([{ id: 'a', result: 'missing' }, { id: 'b', result: 'missing' }]);
     // One match, read as a result for an unplanned scenario: no planned scenario reads it.
     expect(cli({ planned: ['a'], results: [result('x', 'pass')] })).toMatchObject({ status: 1, verdict: { verdict: 'infra-only', scenarios: [{ id: 'a', result: 'missing' }] } });
+  });
+
+  it('a `pass` an artifact claims counts only when the scenario\'s own `act` job recorded it in the run\'s jobs list (#24, R3)', () => {
+    const planted = [uploaded(result('a', 'pass')), uploaded(result('b', 'pass'))];
+    // `a`'s act job recorded `fail`, and no act job of `b`'s recorded anything: both artifacts were planted.
+    const forged = cli({ planned: ['a', 'b'], jobs: [actOf('a', 'fail'), { name: actJob(1, 'b'), conclusion: 'success', steps: [] }], artifacts: planted });
+    expect(forged).toMatchObject({ status: 1, verdict: { verdict: 'fail', scenarios: [{ id: 'a', result: 'fail' }, { id: 'b', result: 'unconfirmed' }] } });
+    // `b` alone: nothing failed, and nothing confirmed its pass.
+    expect(cli({ planned: ['b'], jobs: [], results: [result('b', 'pass')] })).toMatchObject({ status: 1, verdict: { verdict: 'infra-only', scenarios: [{ id: 'b', result: 'unconfirmed' }] } });
+    // A planted `fail` over a recorded `pass` changes nothing either: the jobs list names the result.
+    expect(cli({ planned: ['a'], jobs: [actOf('a', 'pass')], results: [result('a', 'fail')] })).toMatchObject({ status: 0, verdict: { verdict: 'pass' } });
+  });
+
+  it('can\'t answer `pass` when it can\'t read the run\'s jobs list, and says why', () => {
+    const r = cli({ planned: ['a', 'b'], jobs: null, results: [result('a', 'pass'), result('b', 'fail')] });
+    expect(r).toMatchObject({ status: 1, verdict: { verdict: 'fail', scenarios: [{ id: 'a', result: 'unconfirmed', unconfirmed: expect.stringMatching(/jobs list/) }, { id: 'b', result: 'fail' }] } });
+    expect(cli({ planned: ['a'], jobs: null, results: [result('a', 'pass')] })).toMatchObject({ status: 1, verdict: { verdict: 'infra-only' } });
   });
 
   it('the download step is the one those layouts are: a `pattern:` for `kanon-e2e-result-*`, with no `name:` and no `merge-multiple`', () => {

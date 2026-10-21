@@ -89,7 +89,10 @@ describe('a passing scenario deletes its repository (§5.1 step 7)', () => {
     const { result, state, g, remote } = await segment({ state: kanonState(), routes: { [VARS]: { total_count: 1 } } });
     expect(result).toMatchObject({ schema: 'kanon-e2e-result/v1', scenario: 'sample', release: RELEASE, result: 'pass', repository: REPOSITORY, firstFailure: null, repositoryAction: 'deleted' });
     expect(result.steps).toEqual([expect.objectContaining({ phase: 1, segment: 'act', verb: 'expect.api', outcome: 'pass', durationMs: expect.any(Number) })]);
-    expect(g.writes().map((c) => c.key)).toEqual([`DELETE repos/${REPOSITORY}`]);
+    expect(g.writes().map((c) => [c.key, c.body])).toEqual([
+      [`PUT repos/${REPOSITORY}/topics`, { names: ['kanon-e2e', 'kanon-e2e-provisioned', 'kanon-e2e-passed'] }],
+      [`DELETE repos/${REPOSITORY}`, undefined],
+    ]);
     expect(state).toMatchObject({ result: 'pass', finalized: true, laid: true });
     expect(commits(remote)).toEqual(['Lay the scenario\'s starting tree']);
     expect(remoteFiles(remote)).toEqual({ 'README.md': `Pinned to ${RELEASE} in ${REPOSITORY}.\n` });
@@ -103,15 +106,13 @@ describe('a passing scenario deletes its repository (§5.1 step 7)', () => {
     expect(first.g.writes()).toEqual([]);
   });
 
-  it('a later phase after the result passes the state through and calls nothing', async () => {
-    const done = kanonState({ result: 'pass', finalized: true, laid: true });
-    for (const kind of ['kanon', 'act']) {
-      const g = stubGh({});
-      const { state, result } = await segment({ segment: kind, phase: 2, state: done, gh: g });
-      expect(result).toBeNull();
-      expect(state).toEqual(done);
-      expect(g.calls).toEqual([]);
-    }
+  it('a later `kanon` job after the result passes the state through and calls nothing', async () => {
+    const done = kanonState({ result: 'fail', finalized: true, laid: true });
+    const g = stubGh({});
+    const { state, result } = await segment({ segment: 'kanon', phase: 2, state: done, gh: g });
+    expect(result).toBeNull();
+    expect(state).toEqual(done);
+    expect(g.calls).toEqual([]);
   });
 });
 
@@ -311,7 +312,10 @@ describe('an `infra` result never reads as `pass` (§5.2, §10)', () => {
     const { result, g } = await segment({ state: kanonState(), routes: { [VARS]: fail('HTTP 502: Bad Gateway') } });
     expect(result).toMatchObject({ result: 'infra', repositoryAction: 'deleted' });
     expect(g.calls.filter((c) => c.key === VARS)).toHaveLength(4);
-    expect(g.writes().map((c) => c.key)).toEqual([`DELETE repos/${REPOSITORY}`]);
+    expect(g.writes().map((c) => [c.key, c.body])).toEqual([
+      [`PUT repos/${REPOSITORY}/topics`, { names: ['kanon-e2e', 'kanon-e2e-provisioned', 'kanon-e2e-infra'] }],
+      [`DELETE repos/${REPOSITORY}`, undefined],
+    ]);
   });
 
   it('an expired token is `infra`', () => {
@@ -339,6 +343,54 @@ describe('an `infra` result never reads as `pass` (§5.2, §10)', () => {
     execFileSync('sh', ['-c', `printf '{"schema":"kanon-e2e-state/v1","scenario":"other"}' > "${bad}"`]);
     expect(readState(bad).problem).toMatch(/scenario|missing/);
     expect(readState(join(dir, 'none.json')).problem).toMatch(/no state/);
+  });
+});
+
+describe('the repository records the result, which a `kanon` job\'s code can\'t write (#24, R2)', () => {
+  const twoPhases = { phases: [{ kanon: [], act: [expectVars()] }, { kanon: [], act: [expectVars()] }] };
+  const recording = (topic) => stubGh({ ...repoRoutes({ topics: [...PROVISIONED, topic] }), [VARS]: { total_count: 1 } });
+
+  it('an `act` job whose repository records a result passes it on as final, whatever the state says, and calls nothing more', async () => {
+    for (const [topic, recorded] of [['kanon-e2e-failed', 'fail'], ['kanon-e2e-infra', 'infra'], ['kanon-e2e-passed', 'pass']]) {
+      // A state planted to read as a scenario still running, with nothing failed.
+      const g = recording(topic);
+      const { state, result } = await segment({ phase: 2, steps: twoPhases, state: kanonState({ laid: true }), gh: g });
+      expect(result, topic).toBeNull();
+      expect(state, topic).toMatchObject({ result: recorded, finalized: true });
+      expect(g.calls.map((c) => c.key), topic).toEqual([`GET repos/${REPOSITORY}`]);
+    }
+  });
+
+  it('a recorded `fail` stands over a state that claims the scenario ended otherwise, or never failed', async () => {
+    for (const planted of [kanonState({ laid: true }), kanonState({ result: 'pass', finalized: true, laid: true }), kanonState({ result: 'infra', finalized: true, laid: true })]) {
+      const { state } = await segment({ phase: 2, steps: twoPhases, state: planted, gh: recording('kanon-e2e-failed') });
+      expect(state.result).toBe('fail');
+    }
+  });
+
+  it('a state that arrives final, with no result the repository records, is refused as `infra`, and the job ends the scenario', async () => {
+    for (const r of ['pass', 'fail', 'infra']) {
+      const { state, result, g } = await segment({ phase: 2, steps: twoPhases, state: kanonState({ result: r, finalized: true, laid: true }), routes: { [VARS]: { total_count: 1 } } });
+      const want = r === 'fail' ? 'fail' : 'infra';
+      expect(result, r).toMatchObject({ result: want, repositoryAction: want === 'fail' ? 'kept' : 'deleted' });
+      expect(state.finalized, r).toBe(true);
+      expect(g.calls.filter((c) => c.key === VARS), r).toEqual([]);
+    }
+    const { result } = await segment({ phase: 2, steps: twoPhases, state: kanonState({ finalized: true, laid: true }), routes: { [VARS]: { total_count: 1 } } });
+    expect(result.firstFailure.message).toMatch(/arrived final.*records no result/);
+  });
+
+  it('never reads `pass` for a phase the scenario doesn\'t have, whatever state arrives: `infra`', async () => {
+    // A two-phase scenario's phase 3, reached with a planted state that reads as still running.
+    const { result } = await segment({ phase: 3, steps: twoPhases, state: kanonState({ laid: true }), routes: { [VARS]: { total_count: 1 } } });
+    expect(result).toMatchObject({ result: 'infra', firstFailure: expect.objectContaining({ message: expect.stringMatching(/2 phases; there is no phase 3/) }) });
+  });
+
+  it('records the result as a topic before it ends the repository, and still ends it when the topic can\'t be written', async () => {
+    const g = stubGh({ ...repoRoutes(), [VARS]: { total_count: 1 }, [`PUT repos/${REPOSITORY}/topics`]: fail('HTTP 502: Bad Gateway') });
+    const { result } = await segment({ state: kanonState(), gh: g });
+    expect(result).toMatchObject({ result: 'pass', repositoryAction: 'deleted' });
+    expect(g.writes().map((c) => c.key)).toEqual([...Array(4).fill(`PUT repos/${REPOSITORY}/topics`), `DELETE repos/${REPOSITORY}`]);
   });
 });
 

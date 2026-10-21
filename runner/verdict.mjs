@@ -9,8 +9,17 @@
 //   fail        one read `fail`, or `skipped` (E10's ledger: `skipped: budget`); or a candidate's
 //               run has no gating scenario ("no scenario gates yet"); or the candidate's red issue
 //               holds an open `fail`, whatever this run's scenarios did;
-//   infra-only  nothing failed, but one read `infra` or left no result, or `start` failed, so the
-//               Reporter couldn't post. Never `pass`.
+//   infra-only  nothing failed, but one read `infra` or left no result, or its `pass` was
+//               unconfirmed, or `start` failed, so the Reporter couldn't post. Never `pass`.
+//
+// WHAT IT TAKES AS A SCENARIO'S RESULT (#24, R3): the one the run's jobs list records, which only
+// an `act` job can write (runner/evidence.mjs), never an artifact's word alone. Code in a `kanon`
+// job can plant a `kanon-e2e-result-<scenario>` under any scenario's name. So a scenario reads the
+// result its first `act` job to finalize it recorded, and its artifact gives only the details of
+// that result; and a `pass` counts only when that job is the scenario's last `act` job that ran,
+// and concluded `success` (the Owner, 2026-10-19). A `pass` it can't confirm that way, its jobs
+// list unread among them, reads `unconfirmed`. An artifact's `fail` or `infra` with nothing
+// recorded stands: it can only hold the scenario back.
 //
 // ONLY ON A CANDIDATE'S RUN, it reads and writes this repository's issues with its workflow token
 // (`issues: write`, no key). Each is found by the harness's marker on its body's first line, never
@@ -26,7 +35,8 @@
 // verdict's, and the job's conclusion is what Kanon's gate reads (docs/jobs.md).
 //
 //   node runner/verdict.mjs   (reads TRIGGER, RELEASE, CANDIDATE_SHA, START_RESULT, SCENARIOS,
-//                              SKIPPED, RESULTS_DIR, GH_TOKEN, GITHUB_RUN_ID, GITHUB_RUN_ATTEMPT; writes
+//                              SKIPPED, RESULTS_DIR, GH_TOKEN, GITHUB_RUN_ID, GITHUB_RUN_ATTEMPT,
+//                              and the run's jobs list; writes
 //                              OUT/verdict.json, the step's `verdict` and `red-issue` outputs,
 //                              and the step summary)
 
@@ -34,8 +44,10 @@ import { appendFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFile
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
+import { attested, readJobs } from './evidence.mjs';
 import { api } from './lib/gh.mjs';
 import { ghProcess } from './lib/proc.mjs';
+import { retrying } from './lib/retry.mjs';
 import { SETTINGS } from './sizing.mjs';
 
 export const VERDICT_SCHEMA = 'kanon-e2e-verdict/v1';
@@ -57,9 +69,29 @@ const KEPT = /^kanon-e2e\/[A-Za-z0-9._-]+$/;
 export const redTitle = (release) => `e2e: ${release} is red`;
 export const REPORTER_TITLE = 'e2e: the Reporter can\'t post';
 
-/** A result `verdict` reads: `pass`, `fail`, `infra`, or `skipped` with its reason. Anything else is missing. @param {any} r */
-const readable = (r) => r?.schema === RESULT_SCHEMA && typeof r.scenario === 'string'
+/** A result an artifact may give: `pass`, `fail`, `infra`, or `skipped` with its reason. Anything else is missing. @param {any} r */
+const fromArtifact = (r) => r?.schema === RESULT_SCHEMA && typeof r.scenario === 'string'
   && (['pass', 'fail', 'infra'].includes(r.result) || (r.result === 'skipped' && typeof r.skipped === 'string' && SKIP_REASON.test(r.skipped)));
+
+/** A result `judge` reads: an artifact's, or `unconfirmed` with why, which only `attest` gives. @param {any} r */
+const readable = (r) => fromArtifact(r) || (r?.schema === RESULT_SCHEMA && typeof r.scenario === 'string' && r.result === 'unconfirmed' && typeof r.unconfirmed === 'string');
+
+/**
+ * Each planned scenario's result as the run's jobs list records it (#24, R3): the artifact's when
+ * it agrees, a bare one with the recorded result when it doesn't, and `unconfirmed`, with why, for
+ * a `pass` nothing confirms. `jobs` is null when the list couldn't be read: no `pass` stands then.
+ * An artifact's `fail`, `infra` or `skipped` with nothing recorded stands as it is.
+ * @param {Array<{ id: string }>} planned @param {any[]} results @param {any[] | null} jobs
+ */
+export const attest = (planned, results, jobs) => planned.flatMap((p) => {
+  const artifact = results.find((r) => fromArtifact(r) && r.scenario === p.id);
+  const unconfirmed = (/** @type {string} */ why) => [{ schema: RESULT_SCHEMA, scenario: p.id, result: 'unconfirmed', unconfirmed: why }];
+  const e = jobs ? attested(jobs, p.id) : { result: null, why: 'the run\'s jobs list couldn\'t be read' };
+  if (e.result === 'unconfirmed') return unconfirmed(/** @type {string} */ (e.why));
+  if (e.result) return [artifact?.result === e.result ? artifact : { schema: RESULT_SCHEMA, scenario: p.id, result: e.result }];
+  if (artifact?.result === 'pass') return unconfirmed(/** @type {string} */ (e.why));
+  return artifact ? [artifact] : [];
+});
 
 /**
  * The run's verdict. `planned` is `plan`'s scenarios, each with its `gate`; `held` is the
@@ -73,7 +105,10 @@ export function judge({ trigger = '', planned, results, startResult, held = null
   const scenarios = planned.map((p) => {
     const gate = p.gate === true;
     const r = byId.get(p.id);
-    return { id: p.id, gate, counts: candidate ? gate : true, result: r?.result ?? 'missing', ...(r?.result === 'skipped' ? { skipped: r.skipped } : {}) };
+    return {
+      id: p.id, gate, counts: candidate ? gate : true, result: r?.result ?? 'missing',
+      ...(r?.result === 'skipped' ? { skipped: r.skipped } : {}), ...(r?.result === 'unconfirmed' ? { unconfirmed: r.unconfirmed } : {}),
+    };
   });
   const counted = scenarios.filter((s) => s.counts);
   const failed = counted.filter((s) => s.result === 'fail');
@@ -142,7 +177,7 @@ const runSection = (v, byId, run) => [
     const f = s.result === 'fail' ? r?.firstFailure : null;
     const where = f ? ` (phase ${Number(f.phase) || '?'}, ${f.segment === 'kanon' ? 'kanon' : 'act'}${Number.isInteger(f.index) ? `, step ${f.index}` : ''}${typeof f.verb === 'string' ? `, ${inert(f.verb)}` : ''})` : '';
     return [
-      `- \`${s.id}\`${s.gate ? ' (gating)' : ''}: **${s.result}**${s.skipped ? ` (${s.skipped})` : ''}.`,
+      `- \`${s.id}\`${s.gate ? ' (gating)' : ''}: **${s.result}**${s.skipped ? ` (${s.skipped})` : ''}${s.unconfirmed ? ` (${inert(s.unconfirmed)})` : ''}.`,
       f?.message !== undefined && f?.message !== null ? ` First failure${where}: ${inert(f.message)}.` : '',
       r?.repositoryAction === 'kept' && KEPT.test(String(r.repository)) ? ` Repository kept, archived, for 24 hours: https://github.com/${r.repository}` : '',
     ].join('');
@@ -306,11 +341,15 @@ export const withSkipped = (planned, results, skipped) => {
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const env = process.env;
-  const { planned, results } = withSkipped(
-    JSON.parse(env.SCENARIOS || '[]').map((/** @type {any} */ s) => ({ id: s.id, gate: s.gate === true })),
-    readResults(env.RESULTS_DIR ?? 'results'),
-    JSON.parse(env.SKIPPED || '[]'),
-  );
+  const plannedIn = JSON.parse(env.SCENARIOS || '[]').map((/** @type {any} */ s) => ({ id: s.id, gate: s.gate === true }));
+  /** @type {any[] | null} */
+  let jobs = null;
+  try {
+    jobs = await readJobs({ gh: retrying(ghProcess(env), { sleep: (ms) => new Promise((r) => setTimeout(r, ms)) }), repository: H }, env.GITHUB_RUN_ID ?? '', env.GITHUB_RUN_ATTEMPT ?? '');
+  } catch (e) {
+    console.log(`::error title=verdict::could not read the run's jobs list, so no scenario's \`pass\` can be confirmed: ${/** @type {Error} */ (e).message}`);
+  }
+  const { planned, results } = withSkipped(plannedIn, attest(plannedIn, readResults(env.RESULTS_DIR ?? 'results'), jobs), JSON.parse(env.SKIPPED || '[]'));
   const run = { id: env.GITHUB_RUN_ID ?? '', attempt: env.GITHUB_RUN_ATTEMPT ?? '', url: `${env.GITHUB_SERVER_URL ?? 'https://github.com'}/${env.GITHUB_REPOSITORY ?? H}/actions/runs/${env.GITHUB_RUN_ID ?? ''}` };
   const v = await give({
     trigger: env.TRIGGER ?? '', release: env.RELEASE ?? '', candidateSha: env.CANDIDATE_SHA ?? '', startResult: env.START_RESULT ?? '', run, planned,
@@ -334,7 +373,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       '',
       '| Scenario | Gate | Counts | Result |',
       '|---|---|---|---|',
-      ...v.scenarios.map((s) => `| \`${s.id}\` | ${s.gate} | ${s.counts ? 'yes' : 'no'} | ${s.result}${s.skipped ? ` (${s.skipped})` : ''} |`),
+      ...v.scenarios.map((s) => `| \`${s.id}\` | ${s.gate} | ${s.counts ? 'yes' : 'no'} | ${s.result}${s.skipped ? ` (${s.skipped})` : ''}${s.unconfirmed ? ` (${inert(s.unconfirmed)})` : ''} |`),
       '',
     ].join('\n'));
   }

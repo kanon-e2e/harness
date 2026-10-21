@@ -2,6 +2,7 @@ import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { BURN_IN, count, render } from '../runner/burn-in.mjs';
+import { RESULT_STEPS, actJob } from '../runner/evidence.mjs';
 import { stubGh } from './helpers/stubs.mjs';
 
 /**
@@ -30,6 +31,18 @@ const run = (id, o = {}) => ({
 });
 
 /**
+ * Attempt 1's jobs list (#24, R3): by default its `act` job recorded the result the artifact
+ * reads. `evidence` says otherwise: the result its `act` job recorded instead, `legacy` for a run
+ * from before the result steps, or `none` for no `act` job of the scenario at all.
+ */
+const jobsOf = (r) => {
+  const recorded = r.evidence ?? r.result;
+  if (recorded === 'none') return [];
+  const steps = recorded === 'legacy' ? [{ name: 'Run the act segment', conclusion: 'success' }] : ['pass', 'fail', 'infra'].map((x) => ({ name: RESULT_STEPS[x], conclusion: x === recorded ? 'success' : 'skipped' }));
+  return [{ name: actJob(1, ID), conclusion: 'success', steps }];
+};
+
+/**
  * The world `burn-in` reads: the scenario's last change, Kanon's releases (`v0.40.1` then
  * `v0.40.2` at hour 0, unless `rels` says otherwise), every artifact, and each run.
  */
@@ -56,6 +69,7 @@ const world = (runs, { rels = [['v0.40.1', -100], ['candidate-v0.40.2', -50], ['
       status: r.status, created_at: at(r.hours), run_started_at: at(r.rerunHours ?? r.hours), run_attempt: r.attempts,
     }])),
     ...Object.fromEntries(runs.map((r) => [`GET ${H}/compare/${start?.sha ?? CHANGE}...h${r.id}`, { status: r.before ? 'behind' : 'ahead' }])),
+    ...Object.fromEntries(runs.map((r) => [`GET ${H}/actions/runs/${r.id}/attempts/1/jobs?per_page=100`, [{ total_count: 1, jobs: jobsOf(r) }]])),
   };
   const g = stubGh(routes);
   /** `gh run download <run> -R <repo> -n <name> -D <dir>`: writes the artifact's files into `dir`. */
@@ -121,6 +135,27 @@ describe('the run of passes (§10, the Owner\'s rule of 2026-10-18)', () => {
       expect(out.streak).toBe(2);
       expect(out.rows.find((r) => r.run === 4)).toMatchObject({ pass: false, result: 'expired' });
     }
+  });
+});
+
+describe('a pass counts only when attempt 1\'s own `act` job recorded it (#24, R3)', () => {
+  it('breaks the run on a `pass` artifact the jobs list doesn\'t confirm: one a `kanon` job\'s code planted', async () => {
+    for (const evidence of ['fail', 'infra', 'none']) {
+      const out = await burnIn([...passes(3), run(4, { evidence }), ...passes(2, 5)]);
+      expect(out.streak, evidence).toBe(2);
+      expect(out.rows.find((r) => r.run === 4), evidence).toMatchObject({ pass: false, result: evidence === 'none' ? 'unconfirmed' : evidence });
+    }
+  });
+
+  it('reads attempt 1\'s jobs list, for a run with one attempt or more', async () => {
+    const out = await burnIn([run(1), run(2, { attempts: 2, rerunHours: 40 })]);
+    expect(out.g.calls.map((c) => c.key).filter((k) => k.includes('/jobs'))).toEqual([`GET ${H}/actions/runs/1/attempts/1/jobs?per_page=100`, `GET ${H}/actions/runs/2/attempts/1/jobs?per_page=100`]);
+    expect(out.streak).toBe(2);
+  });
+
+  it('a run from before the result steps existed reads its artifact, as it did then: its `act` jobs list none', async () => {
+    const out = await burnIn(passes(3, 1, { evidence: 'legacy' }));
+    expect(out.streak).toBe(3);
   });
 });
 
