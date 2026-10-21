@@ -12,9 +12,14 @@
 //   infra   GitHub failed and the retries outlasted it, a token expired, the repository wasn't
 //           provisioned or is gone, or the state didn't arrive;
 //   pass    the last phase's `act` segment ran every step. Only an `act` job reads `pass`: a
-//           state that arrives claiming it before then is refused, as `infra`.
-// The `act` job that learns the result ends the repository: `pass` and `infra` delete it, `fail`
-// keeps it 24 hours, topic `kanon-e2e-failed` then archived (decision 13), for the janitor.
+//           state that arrives claiming it is refused, as `infra`.
+// The `act` job that learns the result records it on the repository as a topic, `kanon-e2e-passed`,
+// `kanon-e2e-failed` or `kanon-e2e-infra`, then ends it: `pass` and `infra` delete it, `fail` keeps
+// it 24 hours, archived (decision 13), for the janitor. The topic is the scenario's record of
+// having ended (#24, R2): only the act token can write it, never a `kanon` job's code, which can
+// plant a state or an artifact. So an `act` job reads the repository before the state, and a
+// result the repository records is final, whatever the state says; a state that says the scenario
+// ended, with no such topic, is refused as `infra`.
 //
 //   node runner/run.mjs   (reads the environment below; always exits 0 once it has a state)
 
@@ -37,6 +42,20 @@ export const RESULT_SCHEMA = 'kanon-e2e-result/v1';
 export const TOPIC = 'kanon-e2e';
 export const PROVISIONED = 'kanon-e2e-provisioned';
 export const FAILED = 'kanon-e2e-failed';
+export const PASSED = 'kanon-e2e-passed';
+export const INFRA = 'kanon-e2e-infra';
+/** The topic each result is recorded with on the repository, by the `act` job that learns it (#24, R2). */
+export const RESULT_TOPICS = Object.freeze({ pass: PASSED, fail: FAILED, infra: INFRA });
+/**
+ * The result a repository's topics record, or null: `fail` over `infra` over `pass`, should it
+ * carry more than one.
+ * @param {unknown} topics
+ * @returns {'pass' | 'fail' | 'infra' | null}
+ */
+export const recordedResult = (topics) => {
+  const list = Array.isArray(topics) ? topics : [];
+  return /** @type {const} */ (['fail', 'infra', 'pass']).find((r) => list.includes(RESULT_TOPICS[r])) ?? null;
+};
 /** The secret a `claude: subscription` scenario's repository holds (the `model-key` job writes it). */
 export const MODEL_SECRET = 'CLAUDE_CODE_OAUTH_TOKEN';
 export const LAY_MESSAGE = 'Lay the scenario\'s starting tree';
@@ -143,15 +162,18 @@ export async function runSegment(a, deps) {
       : fresh;
   } else {
     state = structuredClone(state);
-    if (state.finalized) {
+    if (state.finalized && a.segment === 'kanon') {
       log(`The scenario's result, ${state.result}, is final: this job passes the state through.`);
       return { state, result: null };
     }
     if (state.result === 'pass') {
       state.result = 'infra';
-      state.firstFailure = { phase: a.phase, segment: a.segment, index: null, verb: null, message: 'the state arrived claiming `pass` before an `act` job finalized the scenario: refused' };
+      state.firstFailure = { phase: a.phase, segment: a.segment, index: null, verb: null, message: 'the state arrived claiming `pass`, which only an `act` job reads: refused' };
     }
   }
+  // Only the repository says the scenario ended (#24, R2), so a state's own word counts for nothing.
+  const arrivedFinal = state.finalized === true;
+  state.finalized = false;
 
   /** Records the first failure and sets the result, once. */
   const setResult = (/** @type {'fail' | 'infra'} */ r, /** @type {string} */ message, at = { index: null, verb: null }) => {
@@ -175,6 +197,17 @@ export async function runSegment(a, deps) {
       } else setResult(classify(e) === 'infra' ? 'infra' : 'fail', `reading the repository: ${/** @type {Error} */ (e).message}`);
     }
   }
+
+  // THE RESULT THE REPOSITORY RECORDS (#24, R2): final, whatever the state says.
+  const recorded = a.segment === 'act' ? recordedResult(repo?.topics) : null;
+  if (recorded) {
+    state.result = recorded;
+    state.finalized = true;
+    log(`The repository records the scenario's result, ${recorded}: this job passes the state through.`);
+    return { state, result: null };
+  }
+  if (arrivedFinal) setResult('infra', 'the state arrived final, but the repository records no result: refused');
+  if (a.phase > phases.length) setResult('infra', `the scenario has ${phases.length} phase${phases.length === 1 ? '' : 's'}; there is no phase ${a.phase}`);
 
   // THE PRECONDITIONS: each is the harness's, so a failure is `infra`; the deadline is the scenario's.
   if (!state.result && repo) {
@@ -261,14 +294,21 @@ export async function runSegment(a, deps) {
 
   if (a.segment === 'kanon' || (!state.result && !last)) return { state, result: null };
 
-  // THE END OF THE SCENARIO: the `act` job that learns its result ends the repository.
+  // THE END OF THE SCENARIO: the `act` job that learns its result records it, then ends the repository.
   if (!state.result) state.result = 'pass';
   let repositoryAction = 'left';
+  if (!gone) {
+    const topic = RESULT_TOPICS[/** @type {'pass' | 'fail' | 'infra'} */ (state.result)];
+    try {
+      const names = [...new Set([...(repo?.topics ?? []), TOPIC, topic])];
+      await api(ghCtx, `repos/${a.repository}/topics`, { method: 'PUT', body: { names } });
+    } catch (e) {
+      log(`Could not record the result as the \`${topic}\` topic (${/** @type {Error} */ (e).message}); the repository is ended all the same.`);
+    }
+  }
   if (gone) repositoryAction = 'gone';
   else if (state.result === 'fail') {
     try {
-      const names = [...new Set([...(repo?.topics ?? []), TOPIC, FAILED])];
-      await api(ghCtx, `repos/${a.repository}/topics`, { method: 'PUT', body: { names } });
       await api(ghCtx, `repos/${a.repository}`, { method: 'PATCH', body: { archived: true } });
       repositoryAction = 'kept';
     } catch (e) {

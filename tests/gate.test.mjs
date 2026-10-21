@@ -1,57 +1,66 @@
 import { spawnSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { chmodSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { gate, phasesOf, repositoryName } from '../runner/gate.mjs';
-import { tempDir, writeTree } from './helpers/stubs.mjs';
+import { tempDir } from './helpers/stubs.mjs';
 import { readWorkflows } from './helpers/workflows.mjs';
 
 /**
  * The gate before phases 2 and 3 (harness #62): the scenarios a phase runs are the planned ones
  * that have that phase and that no earlier phase ended. A two-phase scenario that passed has had
  * its repository deleted, so a phase-3 mint scoped to it fails, and a passing run went red.
+ *
+ * Whether a scenario ended, the gate reads from its repository (#24, R2): the `act` job that
+ * learns a result records it as a topic before it deletes or archives the repository, and only
+ * the act token can do any of the three. It never reads a `kanon-e2e-result-<scenario>`
+ * artifact, which code in a `kanon` job can plant.
  */
 
 const RUN = { id: '39213363892', attempt: '1' };
 const entry = (id) => ({ id, apps: ['author'], claude: 'none', gate: true });
-const repo = (id, run = RUN) => `kanon-e2e/${repositoryName(id, run.id, run.attempt)}`;
-const ended = (id, result, more = {}) => ({ schema: 'kanon-e2e-result/v1', scenario: id, result, repository: repo(id), ...more });
+/** A repository as `GET repos/<owner>/<name>` answers for it, as `provision` left it and an `act` job marked it. */
+const standing = (...topics) => ({ repo: { topics: ['kanon-e2e', 'kanon-e2e-provisioned', ...topics], archived: false } });
+const TOPIC = { pass: 'kanon-e2e-passed', fail: 'kanon-e2e-failed', infra: 'kanon-e2e-infra' };
 const phases = { two: 2, three: 3, one: 1 };
-const decide = (phase, results, planned = ['one', 'two', 'three'].map(entry)) => gate({ phase, planned, results, run: RUN, phasesOf: (id) => phases[id] });
+const decide = (phase, repositories = {}, planned = ['one', 'two', 'three'].map(entry)) => gate({ phase, planned, repositories, phasesOf: (id) => phases[id] });
 
 describe('gate: the scenarios phase N runs', () => {
   it('drops a scenario with fewer than N phases, and keeps one with N or more', () => {
-    expect(decide(2, []).scenarios.map((s) => s.id)).toEqual(['two', 'three']);
-    expect(decide(3, []).scenarios.map((s) => s.id)).toEqual(['three']);
-    expect(decide(3, []).dropped).toEqual([
+    expect(decide(2).scenarios.map((s) => s.id)).toEqual(['two', 'three']);
+    expect(decide(3).scenarios.map((s) => s.id)).toEqual(['three']);
+    expect(decide(3).dropped).toEqual([
       { id: 'one', why: 'it has 1 phase; there is no phase 3' },
       { id: 'two', why: 'it has 2 phases; there is no phase 3' },
     ]);
   });
 
-  it('drops a scenario an earlier phase ended, whatever it read: pass, fail or infra', () => {
+  it('drops a scenario whose repository records a result, whatever it reads: pass, fail or infra', () => {
     for (const r of ['pass', 'fail', 'infra']) {
-      const d = decide(2, [ended('three', r)]);
+      const d = decide(2, { three: standing(TOPIC[r]) });
       expect(d.scenarios.map((s) => s.id), r).toEqual(['two']);
-      expect(d.dropped, r).toEqual([{ id: 'one', why: 'it has 1 phase; there is no phase 2' }, { id: 'three', why: `it ended in an earlier phase: it reads ${r}` }]);
+      expect(d.dropped, r).toEqual([{ id: 'one', why: 'it has 1 phase; there is no phase 2' }, { id: 'three', why: `it ended in an earlier phase: its repository records ${r}` }]);
     }
   });
 
-  it('keeps a scenario that reached phase N with no result, so a failure there still fails its job', () => {
-    expect(decide(3, [ended('two', 'pass')]).scenarios).toEqual([entry('three')]);
+  it('drops a scenario whose repository is gone or archived: only an `act` job deletes or archives one', () => {
+    expect(decide(3, { three: { gone: true } }).dropped.at(-1)).toEqual({ id: 'three', why: 'it ended in an earlier phase: its repository is gone' });
+    expect(decide(3, { three: { repo: { topics: ['kanon-e2e'], archived: true } } }).dropped.at(-1)).toEqual({ id: 'three', why: 'it ended in an earlier phase: its repository is archived' });
   });
 
-  it('a result counts only for its own scenario and this attempt\'s repository: an earlier attempt\'s, another scenario\'s or a malformed one changes nothing', () => {
-    const earlier = { ...RUN, attempt: '0' };
-    expect(decide(3, [ended('three', 'fail', { repository: repo('three', earlier) })]).scenarios.map((s) => s.id)).toEqual(['three']);
-    expect(decide(3, [ended('two', 'fail', { repository: repo('three') })]).scenarios.map((s) => s.id)).toEqual(['three']);
-    expect(decide(3, [ended('three', 'fail', { schema: 'something-else/v1' })]).scenarios.map((s) => s.id)).toEqual(['three']);
-    expect(decide(3, [null, 'pass', [], { scenario: 'three' }]).scenarios.map((s) => s.id)).toEqual(['three']);
+  it('keeps a scenario whose repository records no result, so a failure there still fails its job', () => {
+    expect(decide(3, { two: standing(TOPIC.pass), three: standing() }).scenarios).toEqual([entry('three')]);
+  });
+
+  it('keeps one whose repository it couldn\'t read, and says so: its own `act` job reads the repository again', () => {
+    const d = decide(3, { three: { problem: 'HTTP 502' } });
+    expect(d.scenarios).toEqual([entry('three')]);
+    expect(d.unread).toEqual([{ id: 'three', why: 'HTTP 502' }]);
   });
 
   it('hands each kept scenario on as `plan` planned it, so the phase\'s matrix is the same entries', () => {
     const planned = [{ ...entry('three'), apps: ['author', 'judge'], claude: 'subscription' }];
-    expect(decide(2, [], planned).scenarios).toEqual(planned);
+    expect(decide(2, {}, planned).scenarios).toEqual(planned);
   });
 
   it('reads the phases from the catalogue: the install scenarios have two, deploy-rehearsal three', () => {
@@ -72,44 +81,68 @@ describe('gate: the repository name is the one e2e.yml\'s scenario jobs use', ()
 });
 
 describe('gate: node runner/gate.mjs, as gate-2 and gate-3 run it', () => {
-  const runGate = (phase, files) => {
+  /** A `gh` on PATH answering `GET repos/kanon-e2e/<name>` from REPOS_FILE: a repository, or `gone` for a 404. */
+  const fakeGh = (dir) => {
+    writeFileSync(join(dir, 'gh'), `#!/usr/bin/env node
+const fs = require('node:fs');
+const args = process.argv.slice(2);
+fs.appendFileSync(process.env.GH_LOG, JSON.stringify(args) + '\\n');
+const repos = JSON.parse(fs.readFileSync(process.env.REPOS_FILE, 'utf8'));
+const path = args[args.length - 1];
+const m = /^repos\\/kanon-e2e\\/([^/]+)$/.exec(path);
+if (args[0] !== 'api' || args.includes('-X') || !m) { process.stderr.write('no route'); process.exit(1); }
+const r = repos[m[1]];
+if (r === undefined || r === 'gone') { process.stderr.write('gh: Not Found (HTTP 404)'); process.exit(1); }
+process.stdout.write(JSON.stringify(r));
+`);
+    chmodSync(join(dir, 'gh'), 0o755);
+  };
+  const runGate = (phase, repos = {}) => {
     const dir = tempDir();
-    writeTree(join(dir, 'results'), files);
+    fakeGh(dir);
+    const all = { 'install-review': standing(), 'install-build': standing(), 'deploy-rehearsal': standing(), ...repos };
+    writeFileSync(join(dir, 'repos.json'), JSON.stringify(Object.fromEntries(Object.entries(all).map(([id, r]) => [repositoryName(id, RUN.id, RUN.attempt), r.gone ? 'gone' : r.repo]))));
     const out = join(dir, 'output');
     const r = spawnSync(process.execPath, ['runner/gate.mjs'], {
       encoding: 'utf8',
       env: {
-        ...process.env, PHASE: String(phase), RESULTS_DIR: join(dir, 'results'), GITHUB_OUTPUT: out, GITHUB_STEP_SUMMARY: join(dir, 'summary'),
+        ...process.env, PATH: `${dir}:${process.env.PATH}`, REPOS_FILE: join(dir, 'repos.json'), GH_LOG: join(dir, 'log'), GH_TOKEN: 'x',
+        PHASE: String(phase), GITHUB_OUTPUT: out, GITHUB_STEP_SUMMARY: join(dir, 'summary'),
         GITHUB_RUN_ID: RUN.id, GITHUB_RUN_ATTEMPT: RUN.attempt, SCENARIOS: JSON.stringify(['install-review', 'install-build', 'deploy-rehearsal'].map(entry)),
       },
     });
-    return { status: r.status, stderr: r.stderr, output: r.status === 0 ? readFileSync(out, 'utf8') : '' };
+    let calls = [];
+    try {
+      calls = readFileSync(join(dir, 'log'), 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l));
+    } catch {}
+    return { status: r.status, stderr: r.stderr, output: r.status === 0 ? readFileSync(out, 'utf8') : '', calls };
   };
-  const result = (id, r) => JSON.stringify({ schema: 'kanon-e2e-result/v1', scenario: id, result: r, repository: repo(id) });
 
   it('phase 3 of a run whose install scenarios passed: only deploy-rehearsal, and the gate itself exits 0', () => {
-    const { status, output } = runGate(3, { 'kanon-e2e-result-install-review/result.json': result('install-review', 'pass'), 'kanon-e2e-result-install-build/result.json': result('install-build', 'pass') });
+    const { status, output, calls } = runGate(3, { 'install-review': { gone: true }, 'install-build': standing(TOPIC.pass) });
     expect(status).toBe(0);
     expect(output).toBe(`scenarios=${JSON.stringify([entry('deploy-rehearsal')])}\n`);
+    // Only the scenario with a phase 3 is read, and only by GET.
+    expect(calls).toEqual([['api', `repos/kanon-e2e/${repositoryName('deploy-rehearsal', RUN.id, RUN.attempt)}`]]);
   });
 
   it('phase 2 after one scenario failed in phase 1: the others; with every scenario ended, an empty list, still exit 0', () => {
-    expect(runGate(2, { 'kanon-e2e-result-install-build/result.json': result('install-build', 'fail') }).output)
+    expect(runGate(2, { 'install-build': { repo: { topics: ['kanon-e2e', TOPIC.fail], archived: true } } }).output)
       .toBe(`scenarios=${JSON.stringify(['install-review', 'deploy-rehearsal'].map(entry))}\n`);
-    const all = runGate(2, {
-      'kanon-e2e-result-install-review/result.json': result('install-review', 'infra'),
-      'kanon-e2e-result-install-build/result.json': result('install-build', 'fail'),
-      'kanon-e2e-result-deploy-rehearsal/result.json': result('deploy-rehearsal', 'fail'),
-    });
+    const all = runGate(2, { 'install-review': { gone: true }, 'install-build': standing(TOPIC.fail), 'deploy-rehearsal': standing(TOPIC.infra) });
     expect(all).toMatchObject({ status: 0, output: 'scenarios=[]\n' });
   });
 
-  it('one downloaded result lands in RESULTS_DIR itself (harness #30), and still counts', () => {
-    expect(runGate(2, { 'result.json': result('install-build', 'fail') }).output)
-      .toBe(`scenarios=${JSON.stringify(['install-review', 'deploy-rehearsal'].map(entry))}\n`);
+  it('a `kanon-e2e-result-*` artifact planted by a `kanon` job\'s code ends nothing: the gate doesn\'t read one (#24)', () => {
+    const e2e = readWorkflows()['e2e.yml'];
+    for (const name of ['gate-2', 'gate-3']) {
+      expect(e2e.jobs[name].steps.filter((s) => String(s.uses).startsWith('actions/download-artifact@')), name).toEqual([]);
+      expect(e2e.jobs[name].steps.find((s) => s.id === 'gate').env, name).toMatchObject({ GH_TOKEN: '${{ github.token }}' });
+    }
+    expect(readFileSync('runner/gate.mjs', 'utf8')).not.toMatch(/readResults|RESULTS_DIR/);
   });
 
   it('refuses a phase that has no gate: 1, or past three', () => {
-    for (const p of [1, 4, 'x']) expect(runGate(p, {}).status, String(p)).not.toBe(0);
+    for (const p of [1, 4, 'x']) expect(runGate(p).status, String(p)).not.toBe(0);
   });
 });

@@ -16,7 +16,13 @@
 // result that attempt 1 didn't write breaks the run of passes, whatever the re-run read. The run
 // is dated by its creation, since GitHub resets `run_started_at` on a re-run.
 //
-// It reads the runs' markers and results from their artifacts, and Kanon's public releases. It
+// A PASS COUNTS ONLY WHEN ATTEMPT 1'S JOBS LIST RECORDS IT (#24, R3; runner/evidence.mjs): code in
+// a `kanon` job can plant a `kanon-e2e-result-<scenario>` reading `pass`, but not the result step
+// of an `act` job. A `pass` artifact the list doesn't confirm reads what the list recorded, or
+// `unconfirmed`. A run from before the result steps existed, whose `act` jobs list none, is read
+// from its artifact, as it was then.
+//
+// It reads the runs' markers and results from their artifacts, their jobs, and Kanon's public releases. It
 // writes nothing but a scratch directory it removes, and holds no key: it needs a token only
 // because an artifact's download answers 401 without one.
 //
@@ -28,6 +34,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
+import { attested, readJobs } from './evidence.mjs';
 import { api, GhError } from './lib/gh.mjs';
 import { RELEASE } from './lib/kanon.mjs';
 import { ghProcess } from './lib/proc.mjs';
@@ -138,7 +145,10 @@ export async function count(scenario, deps) {
     // The attempt that wrote it. A run with one attempt can hold no other's result.
     const own = String(r?.run?.id) === String(run.id) && /^[1-9][0-9]{0,3}$/.test(String(r?.run?.attempt));
     const attempt = own ? Number(r.run.attempt) : attempts === 1 ? 1 : null;
-    if (attempt === 1 || result === 'unreadable') row(trigger, release, result, { attempt });
+    if (attempt === 1 && result === 'pass') {
+      const e = attested(await readJobs(ctx, run.id, 1), scenario);
+      row(trigger, release, e.result ?? (e.legacy ? 'pass' : 'unconfirmed'), { attempt });
+    } else if (attempt === 1 || result === 'unreadable') row(trigger, release, result, { attempt });
     else row(trigger, release, 're-run', { attempt, rerun: result });
   }
 

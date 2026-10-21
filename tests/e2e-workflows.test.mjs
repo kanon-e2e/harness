@@ -102,11 +102,11 @@ describe('e2e.yml: the jobs of §5.2, in order', () => {
       expect(JSON.stringify(job), gate).not.toMatch(/secrets\./);
       expect(job['timeout-minutes'], gate).toBe(SETTINGS.minutes.gate);
       expect(job.outputs.scenarios, gate).toBe('${{ steps.gate.outputs.scenarios }}');
-      const download = job.steps.find((s) => String(s.uses).startsWith('actions/download-artifact@'));
-      expect(download, gate).toMatchObject({ 'continue-on-error': true, with: { pattern: 'kanon-e2e-result-*', path: '${{ runner.temp }}/results' } });
+      // It reads each scenario's repository with the workflow's token, never an artifact (#24, R2).
+      expect(job.steps.filter((s) => String(s.uses).startsWith('actions/download-artifact@')), gate).toEqual([]);
       const decide = job.steps.find((s) => s.id === 'gate');
       expect(decide.run, gate).toBe('node runner/gate.mjs');
-      expect(decide.env, gate).toMatchObject({ PHASE: Number(phase), SCENARIOS: '${{ needs.plan.outputs.scenarios }}', RESULTS_DIR: download.with.path });
+      expect(decide.env, gate).toEqual({ PHASE: Number(phase), SCENARIOS: '${{ needs.plan.outputs.scenarios }}', GH_TOKEN: '${{ github.token }}' });
       // Both of the phase's jobs, and so both of its mints, take their scenarios from the gate.
       for (const name of [`kanon-${phase}`, `act-${phase}`]) {
         expect(e2e.jobs[name].strategy.matrix.scenario, name).toBe(`\${{ fromJSON(needs.${gate}.outputs.scenarios) }}`);
@@ -249,7 +249,7 @@ describe('the `kanon` and `act` jobs (§5.2)', () => {
     expect(runStep(act).env).toMatchObject({ SEGMENT: 'act' });
     const text = workflowText('e2e-act-job.yml');
     expect(text).not.toMatch(/\bnpx\b|\bnpm\b|yedeya-labs\/kanon/);
-    for (const s of act.steps) if (s.run) expect(s.run).toMatch(/^node runner\/run\.mjs$|Receive|App token|curl/);
+    for (const s of act.steps) if (s.run) expect(s.run).toMatch(/^node runner\/run\.mjs$|Receive|App token|curl|^echo "This job finalized the scenario, which reads (pass|fail|infra)\."$/);
   });
 
   it('the `act` job unpacks the tree into a scratch directory, which only the runner reads, as data', () => {
@@ -262,6 +262,11 @@ describe('the `kanon` and `act` jobs (§5.2)', () => {
   it('the `act` job uploads the result only when it finalized the scenario', () => {
     const upload = act.steps.find((s) => s.with?.name === 'kanon-e2e-result-${{ inputs.scenario }}');
     expect(upload.if).toBe("${{ always() && steps.run.outputs.finalized == 'true' }}");
+  });
+
+  it('`verdict` reads the run\'s jobs list, where each `act` job\'s result step is recorded, with `actions: read` and no more (#24, R3)', () => {
+    expect(e2e.jobs.verdict.permissions).toEqual({ actions: 'read', contents: 'read', issues: 'write' });
+    expect(e2e.jobs.verdict.steps.find((s) => s.id === 'give').env).toMatchObject({ GH_TOKEN: '${{ github.token }}' });
   });
 
   it('the Author\'s label job is three steps with no environment: receive, label with `gh`, revoke; no checkout, no harness or Kanon code (K-AGENT-50)', () => {

@@ -323,7 +323,8 @@ jobs:
   # THE SCENARIOS PHASE 2 RUNS (#62): those `plan` planned that have a phase 2 and that no earlier
   # phase ended. An ended scenario's repository was deleted or archived by the `act` job that
   # ended it, and a scenario with fewer phases has nothing to run, so neither gets a phase-2 job,
-  # and no mint is scoped to a repository that may be gone (runner/gate.mjs). Holds no key.
+  # and no mint is scoped to a repository that may be gone (runner/gate.mjs). It reads whether a
+  # scenario ended from its repository's result topic, or its being gone or archived (#24). Holds no key.
   # THE AUTHOR'S LABEL (E10; the Owner, 2026-10-20): after phase 1, for each scenario whose
   # scenario.json names an `authorLabel`, the test Author, a member of the scenario's App register,
   # applies the label to its open pull request, so a model lane's gate admits it (K-AGENT-45). The
@@ -364,18 +365,14 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
-      - name: Download the results of the scenarios that ended
-        continue-on-error: true
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          pattern: kanon-e2e-result-*
-          path: ${{ runner.temp }}/results
+      # From each scenario's repository, public, with the workflow's token: never from a
+      # `kanon-e2e-result-*` artifact, which a `kanon` job's code can plant (#24, R2).
       - name: Decide the scenarios phase 2 runs
         id: gate
         env:
           PHASE: 2
           SCENARIOS: ${{ needs.plan.outputs.scenarios }}
-          RESULTS_DIR: ${{ runner.temp }}/results
+          GH_TOKEN: ${{ github.token }}
         run: node runner/gate.mjs
 
   kanon-2:
@@ -425,7 +422,8 @@ jobs:
   # THE SCENARIOS PHASE 3 RUNS (#62): those `plan` planned that have a phase 3 and that no earlier
   # phase ended. An ended scenario's repository was deleted or archived by the `act` job that
   # ended it, and a scenario with fewer phases has nothing to run, so neither gets a phase-3 job,
-  # and no mint is scoped to a repository that may be gone (runner/gate.mjs). Holds no key.
+  # and no mint is scoped to a repository that may be gone (runner/gate.mjs). It reads whether a
+  # scenario ended from its repository's result topic, or its being gone or archived (#24). Holds no key.
   gate-3:
     name: gate-3 (the scenarios phase 3 runs)
     needs: [plan, start, act-2]
@@ -443,18 +441,14 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
-      - name: Download the results of the scenarios that ended
-        continue-on-error: true
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          pattern: kanon-e2e-result-*
-          path: ${{ runner.temp }}/results
+      # From each scenario's repository, public, with the workflow's token: never from a
+      # `kanon-e2e-result-*` artifact, which a `kanon` job's code can plant (#24, R2).
       - name: Decide the scenarios phase 3 runs
         id: gate
         env:
           PHASE: 3
           SCENARIOS: ${{ needs.plan.outputs.scenarios }}
-          RESULTS_DIR: ${{ runner.temp }}/results
+          GH_TOKEN: ${{ github.token }}
         run: node runner/gate.mjs
 
   kanon-3:
@@ -506,7 +500,9 @@ jobs:
   # files, edits or closes the candidate's red issue and the `the Reporter can't post` issue, with
   # the workflow's own token (`issues: write`), and holds no key (runner/verdict.mjs, E8). It hands
   # `report` the verdict as its outputs: a `kanon` job's code can upload an artifact under any name
-  # in the run, `verdict` among them, but can't set another job's outputs (#24).
+  # in the run, `verdict` among them, but can't set another job's outputs (#24). For the same
+  # reason it takes each result from the run's jobs list (`actions: read`), where the `act` job
+  # that finalized the scenario ran the step that names it, and an artifact only for its details.
   verdict:
     name: verdict
     needs: [plan, start, provision, model-key, kanon-1, act-1, gate-2, kanon-2, act-2, gate-3, kanon-3, act-3]
@@ -514,6 +510,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
+      actions: read
       contents: read
       issues: write
     outputs:

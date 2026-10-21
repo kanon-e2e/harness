@@ -11,7 +11,8 @@
 # (runner/lib/artifact.mjs); anything else refuses the artifact and the scenario reads `fail`.
 # Then it clones the repository itself, lays `start/` as the first commit on the first phase,
 # and runs the steps: pushing what Kanon wrote, `repo.apply`, pull requests, waits. The job that
-# learns the scenario's result ends the repository, and uploads `kanon-e2e-result-<scenario>`.
+# learns the scenario's result records it as the repository's topic and ends the repository,
+# names it in a step of its own, and uploads `kanon-e2e-result-<scenario>` (#24).
 name: e2e — an act job
 
 on:
@@ -109,6 +110,21 @@ jobs:
           WORK: ${{ runner.temp }}/e2e/work
           OUT: ${{ runner.temp }}/e2e/out
         run: node runner/run.mjs
+
+      # THE RESULT, WHERE ONLY THIS JOB CAN WRITE IT (#24, R3). When this job finalized the
+      # scenario, the one of these three steps that runs names its result in the run's jobs list,
+      # which `verdict` and `burn-in` read (runner/evidence.mjs); the other two are skipped, and
+      # all three when it didn't. Code in a `kanon` job can plant an artifact under any name, never
+      # a step of this job.
+      - name: The scenario reads pass
+        if: ${{ steps.run.outputs.finalized == 'true' && steps.run.outputs.result == 'pass' }}
+        run: echo "This job finalized the scenario, which reads pass."
+      - name: The scenario reads fail
+        if: ${{ steps.run.outputs.finalized == 'true' && steps.run.outputs.result == 'fail' }}
+        run: echo "This job finalized the scenario, which reads fail."
+      - name: The scenario reads infra
+        if: ${{ steps.run.outputs.finalized == 'true' && steps.run.outputs.result == 'infra' }}
+        run: echo "This job finalized the scenario, which reads infra."
 
       - name: Upload the state
         if: ${{ always() }}
