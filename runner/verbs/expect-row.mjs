@@ -12,6 +12,11 @@
 //     before it is compared, so a run past its ceiling is still recorded; then at most the step's
 //     `ceilingUsd`, the lane's own `--max-budget-usd`, else `fail`.
 //
+// With a `job`, the one whose run uploads the row, a run with no row reads that job and the jobs
+// it calls (`<job> / …`): when every one was `skipped`, none ran to upload a row, so it fails at
+// once, saying so, rather than at its deadline; else its deadline's message names their
+// conclusions (harness #105).
+//
 // The result carries `costUsd`, and `runner/ledger.mjs` reads it as the scenario's history.
 
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
@@ -36,6 +41,7 @@ export default {
   args: {
     run: str({ required: true, pattern: NAME, ref: 'runs' }),
     lane: str({ required: true, pattern: LANE }),
+    job: str(),
     ceilingUsd: int({ required: true, min: 1, max: 1000 }),
   },
   /** @param {any} step @param {any} ctx */
@@ -45,7 +51,12 @@ export default {
     const name = await poll(ctx, step.deadline, async () => {
       const names = (await api(ctx, repoPath(ctx, `actions/runs/${id}/artifacts?per_page=100`))).artifacts.map((/** @type {any} */ a) => String(a.name));
       const rows = names.filter((n) => pattern.test(n)).sort((a, b) => Number(b.split('-').pop()) - Number(a.split('-').pop()));
-      return rows.length ? met(rows[0]) : unmet(`no telemetry row \`kanon-telemetry-${step.lane}-${id}-<attempt>\` on run ${id}; the run has ${names.length ? names.map((n) => `\`${n}\``).join(', ') : 'none'}`);
+      if (rows.length) return met(rows[0]);
+      const why = `no telemetry row \`kanon-telemetry-${step.lane}-${id}-<attempt>\` on run ${id}; the run has ${names.length ? names.map((n) => `\`${n}\``).join(', ') : 'none'}`;
+      if (step.job === undefined) return unmet(why);
+      const jobs = (await api(ctx, repoPath(ctx, `actions/runs/${id}/jobs?per_page=100`))).jobs.filter((/** @type {any} */ j) => j.name === step.job || String(j.name).startsWith(`${step.job} / `));
+      if (jobs.length && jobs.every((/** @type {any} */ j) => j.conclusion === 'skipped')) throw new Fail(`${why}; job \`${step.job}\` was skipped, so it uploaded none`);
+      return unmet(`${why}; job \`${step.job}\`: ${jobs.length ? jobs.map((/** @type {any} */ j) => `\`${j.name}\` \`${j.conclusion}\``).join(', ') : 'not in the run'}`);
     });
 
     const dir = mkdtempSync(join(tmpdir(), 'row-'));

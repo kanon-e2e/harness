@@ -275,8 +275,11 @@ describe('expect.row', () => {
    * `gh`, stubbed: the run's artifacts in turn, and `run download` writing `file` (text) into the
    * directory it names, as `gh` does. The other calls go to stubGh.
    */
-  const world = ({ names = [['kanon-telemetry-review-5-1']], row = ROW, file = JSON.stringify(row), download = 0 } = {}) => {
-    const g = stubGh({ [`GET repos/${REPO}/actions/runs/5/artifacts?per_page=100`]: inTurn(...names.map((n) => ({ artifacts: n.map((name) => ({ name })) }))) });
+  const world = ({ names = [['kanon-telemetry-review-5-1']], row = ROW, file = JSON.stringify(row), download = 0, jobs = [] } = {}) => {
+    const g = stubGh({
+      [`GET repos/${REPO}/actions/runs/5/artifacts?per_page=100`]: inTurn(...names.map((n) => ({ artifacts: n.map((name) => ({ name })) }))),
+      [`GET repos/${REPO}/actions/runs/5/jobs?per_page=100`]: { jobs: jobs.map(([name, conclusion], i) => ({ id: 100 + i, name, conclusion })) },
+    });
     const downloads = [];
     const gh = async (args, input) => {
       if (args[0] !== 'run') return g.gh(args, input);
@@ -285,7 +288,7 @@ describe('expect.row', () => {
       writeFileSync(join(args[args.indexOf('-D') + 1], 'kanon-telemetry.json'), file);
       return { status: 0, stdout: '', stderr: '' };
     };
-    return { gh, downloads };
+    return { gh, downloads, calls: g.calls };
   };
   const step = { run: 'review', lane: 'review', ceilingUsd: 30, deadline: 5 };
   const ctxOf = (w, state = {}) => context({ gh: w.gh, state: { runs: { review: 5 }, ...state } });
@@ -332,6 +335,29 @@ describe('expect.row', () => {
 
   it('fails at its deadline when the run uploads no row, naming what it has', async () => {
     await expect(run('expect.row', { ...step, deadline: 1 }, ctxOf(world({ names: [['reviewer-transcript-pr1-1']] })))).rejects.toMatchObject(failsWith(/no telemetry row.*reviewer-transcript-pr1-1/));
+  });
+
+  it('with a `job`, fails at once when that job was skipped: it uploaded no row, so the wait is spent on nothing (harness #105)', async () => {
+    const ctx = ctxOf(world({ names: [[]], jobs: [['review / filter', 'success'], ['review / review', 'skipped']] }));
+    const start = ctx.now();
+    await expect(run('expect.row', { ...step, job: 'review / review' }, ctx)).rejects.toMatchObject(failsWith(/no telemetry row.*job `review \/ review` was skipped/));
+    expect(ctx.now()).toBe(start);
+  });
+
+  it('with a `job`, names its conclusion and its called jobs\' at the deadline when the run uploads no row', async () => {
+    const jobs = [['review / filter', 'success'], ['review / review / mint', 'success'], ['review / review / review / review', 'failure'], ['review / reviewer', 'skipped']];
+    const e = await run('expect.row', { ...step, job: 'review / review', deadline: 1 }, ctxOf(world({ names: [[]], jobs }))).catch((x) => x);
+    expect(e).toMatchObject(failsWith(/deadline.*no telemetry row.*`review \/ review \/ mint` `success`, `review \/ review \/ review \/ review` `failure`/));
+    expect(e.message).not.toMatch(/reviewer|filter/);
+    await expect(run('expect.row', { ...step, job: 'review / review', deadline: 1 }, ctxOf(world({ names: [[]], jobs: [['review / filter', 'success']] })))).rejects.toMatchObject(failsWith(/job `review \/ review`: not in the run/));
+  });
+
+  it('with a `job`, reads no jobs when the row is there', async () => {
+    const w = world({ jobs: [['review / review', 'skipped']] });
+    const ctx = ctxOf(w);
+    await run('expect.row', { ...step, job: 'review / review' }, ctx);
+    expect(ctx.state.costUsd).toBe(0.42);
+    expect(w.calls.map((c) => c.key).filter((k) => k.includes('/jobs'))).toEqual([]);
   });
 
   it('a failed download is GitHub\'s, for the runner to classify, never a pass', async () => {
