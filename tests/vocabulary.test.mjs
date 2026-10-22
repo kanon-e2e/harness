@@ -1,5 +1,6 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
+import { GhError } from '../runner/lib/gh.mjs';
 import { poll } from '../runner/lib/poll.mjs';
 import { KNOWN_MARKERS, markerById } from '../runner/lib/markers.mjs';
 import { VOCABULARY } from '../runner/vocabulary.mjs';
@@ -100,6 +101,35 @@ describe('every verb that waits takes a deadline, and polls (§10)', () => {
     const clock = fakeClock();
     const end = clock.now() + 60_000;
     expect(await poll({ now: clock.now, sleep: clock.sleep }, 1, async () => (clock.now() >= end ? { ok: true, value: 1 } : { ok: false, why: 'no' }))).toBe(1);
+  });
+
+  it('a 404 its probe reads is a subject that doesn\'t exist yet: it keeps polling, and fails at the deadline naming it (#19)', async () => {
+    const notFound = new GhError('api GET repos/o/r/branches/next', { status: 1, stdout: '', stderr: 'gh: Not Found (HTTP 404)' });
+    const clock = fakeClock();
+    let tries = 0;
+    expect(await poll({ now: clock.now, sleep: clock.sleep }, 10, async () => { if (++tries < 3) throw notFound; return { ok: true, value: 'there' }; })).toBe('there');
+    expect(clock.sleeps).toEqual([2000, 4000]);
+
+    const late = fakeClock();
+    const start = late.now();
+    await expect(poll({ now: late.now, sleep: late.sleep }, 1, async () => { throw notFound; }))
+      .rejects.toMatchObject({ name: 'Fail', message: expect.stringMatching(/deadline of 1 minute.*GET repos\/o\/r\/branches\/next.*HTTP 404/) });
+    expect(late.now() - start).toBe(60_000);
+  });
+
+  it('any other error its probe throws is the runner\'s to classify (#16): thrown at once, never a `Fail`', async () => {
+    for (const stderr of ['gh: Server Error (HTTP 502)', 'gh: Resource not accessible by integration (HTTP 403)', 'stub: no route']) {
+      const clock = fakeClock();
+      let tries = 0;
+      const e = await poll({ now: clock.now, sleep: clock.sleep }, 10, async () => { tries++; throw new GhError('api GET repos/o/r', { status: 1, stdout: '', stderr }); }).catch((x) => x);
+      expect(e, stderr).toBeInstanceOf(GhError);
+      expect(e.name, stderr).not.toBe('Fail');
+      expect(tries, stderr).toBe(1);
+      expect(clock.sleeps, stderr).toEqual([]);
+    }
+    const clock = fakeClock();
+    const bug = new TypeError('Cannot read properties of null');
+    await expect(poll({ now: clock.now, sleep: clock.sleep }, 10, async () => { throw bug; })).rejects.toBe(bug);
   });
 });
 

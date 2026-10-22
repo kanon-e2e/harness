@@ -15,6 +15,9 @@ export class GhError extends Error {
   }
 }
 
+/** Whether `e` is a `gh` call GitHub answered 404, as `gh` writes it: `Not Found (HTTP 404)`. @param {unknown} e */
+export const notFound = (e) => e instanceof GhError && /\bHTTP 404\b/.test(String(e.stderr));
+
 /**
  * One REST call: `gh api [-X METHOD] [--paginate --slurp] <path> [--input -]`, its body sent as
  * JSON. Returns the parsed answer, or null for an empty one. Paginated pages come back as one list.

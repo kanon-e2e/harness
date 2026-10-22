@@ -29,7 +29,7 @@ import { pathToFileURL } from 'node:url';
 
 import { takeAsData } from './lib/artifact.mjs';
 import { Fail } from './lib/fail.mjs';
-import { GhError, api } from './lib/gh.mjs';
+import { api, notFound } from './lib/gh.mjs';
 import { exec as realExec, ghProcess } from './lib/proc.mjs';
 import { classify, infra, retrying, retryingExec } from './lib/retry.mjs';
 import { SETTINGS } from './sizing.mjs';
@@ -191,7 +191,7 @@ export async function runSegment(a, deps) {
     try {
       repo = await api(ghCtx, `repos/${a.repository}`);
     } catch (e) {
-      if (e instanceof GhError && /\bHTTP 404\b/.test(String(e.stderr))) {
+      if (notFound(e)) {
         gone = true;
         setResult('infra', `the repository ${a.repository} is already gone`);
       } else setResult(classify(e) === 'infra' ? 'infra' : 'fail', `reading the repository: ${/** @type {Error} */ (e).message}`);
@@ -319,7 +319,7 @@ export async function runSegment(a, deps) {
       await api(ghCtx, `repos/${a.repository}`, { method: 'DELETE' });
       repositoryAction = 'deleted';
     } catch (e) {
-      if (e instanceof GhError && /\bHTTP 404\b/.test(String(e.stderr))) repositoryAction = 'gone';
+      if (notFound(e)) repositoryAction = 'gone';
       else log(`Could not delete the repository (${/** @type {Error} */ (e).message}); the janitor deletes it.`);
     }
   }
