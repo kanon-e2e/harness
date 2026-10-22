@@ -293,6 +293,9 @@ describe('expectations read a field, a finding id or a known marker, never prose
     ['doctor\'s notes', 'expect.doctor', '/notes/0'],
     ['a check run\'s output', 'expect.api', '/check_runs/0/output/summary'],
     ['an issue\'s title', 'expect.api', '/title'],
+    ['a workflow run\'s display title', 'expect.api', '/workflow_runs/0/display_title'],
+    ['a comment\'s body as text', 'expect.api', '/0/body_text'],
+    ['a comment\'s body as HTML', 'expect.api', '/0/body_html'],
   ])('refuses one that reads %s', (_, verb, pointer) => {
     const step = verb === 'expect.api'
       ? { verb, path: 'repos/{{repository}}/issues/1', pointer, equals: 'x', deadline: 5 }
