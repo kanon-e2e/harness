@@ -6,7 +6,9 @@
 //
 //   a run that planned the scenario against a candidate, or against the latest stable release
 //     when it started, counts one more pass if the scenario read `pass`, and breaks the run of
-//     passes on anything else (`fail`, `infra`, `skipped`, no result, one it can't read);
+//     passes on anything else (`fail`, `infra`, `skipped`, no result, one it can't read). A
+//     scenario the ledger refused for its cost is in its marker's `skipped`, not its `scenarios`,
+//     and reads `skipped` (#111);
 //   a run whose `plan` stopped (it gave way, was held, or another run was in flight) recorded no
 //     marker, and neither counts nor breaks; nor does a run that didn't plan the scenario, one
 //     against an older stable release, or one whose commit is before the change.
@@ -47,7 +49,8 @@ export const BURN_IN = 10;
 const H = `repos/${SETTINGS.harness}`;
 const K = `repos/${SETTINGS.kanon}`;
 const WORKFLOW = '.github/workflows/e2e.yml';
-const RESULTS = ['pass', 'fail', 'infra', 'skipped'];
+/** What an `act` job's result may read (runner/run.mjs). `skipped` is read from the marker. */
+const RESULTS = ['pass', 'fail', 'infra'];
 
 /**
  * `attempts` is the run's latest attempt; `attempt` the one whose result was read, or null when
@@ -133,9 +136,14 @@ export async function count(scenario, deps) {
     const m = await download(ctx, run.id, marker.name, 'marker.json');
     const trigger = /^[a-z]{1,20}$/.test(String(m?.trigger)) ? String(m.trigger) : '';
     const release = RELEASE.test(String(m?.release)) ? String(m.release) : '';
-    if (!m || !trigger || !release || !Array.isArray(m.scenarios)) { row(trigger, release, 'unreadable'); continue; }
-    if (!m.scenarios.includes(scenario)) continue;
+    // A marker from before `plan` recorded its `skipped` list has none.
+    const skipped = m?.skipped ?? [];
+    if (!m || !trigger || !release || !Array.isArray(m.scenarios) || !Array.isArray(skipped)) { row(trigger, release, 'unreadable'); continue; }
+    // One the ledger refused for its cost was planned, and left out: no job writes its result (#111).
+    const refused = skipped.some((/** @type {any} */ s) => s?.id === scenario);
+    if (!refused && !m.scenarios.includes(scenario)) continue;
     if (!CANDIDATE.test(release) && release !== stableAt(Date.parse(startedAt))) continue;
+    if (refused) { row(trigger, release, 'skipped'); continue; }
 
     const artifact = list.find((a) => a.name === `kanon-e2e-result-${scenario}`);
     if (!artifact) { row(trigger, release, 'no result'); continue; }
