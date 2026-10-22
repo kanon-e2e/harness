@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { decide, fitCap } from '../runner/plan.mjs';
 import { maxScenarios, SETTINGS } from '../runner/sizing.mjs';
+import { judge, withSkipped } from '../runner/verdict.mjs';
 import { fail, stubGh } from './helpers/stubs.mjs';
 
 /**
@@ -333,6 +334,22 @@ describe('the real-model ledger in `plan` (§6.2, E10)', () => {
       expect(out.skipped).toEqual([]);
       expect(out.ledger).toEqual([{ id: 'review-real', started: false, reason: expect.stringMatching(/no recorded cost.*dispatch/) }]);
     }
+  });
+
+  // MUTATION (#107): a `plan` that drops a gating real-model scenario the ledger refused, without
+  // handing it to `verdict`, lets the candidate read `pass` without it, and this test turns red.
+  it('MUTATION: a gating real-model scenario the ledger refuses for no history reaches `verdict` as `skipped`, and the candidate\'s run reads `fail` (#107)', async () => {
+    const gatingModel = CATALOGUE.map((x) => ({ ...x, gate: true }));
+    const out = await plan({ event: 'schedule', schedule: POLL, catalogue: gatingModel }, world());
+    expect(out).toMatchObject({ go: true, trigger: 'candidate' });
+    expect(ids(out)).toEqual(['deploy-rehearsal', 'install-review']);
+    expect(out.skipped).toEqual([{ id: 'review-real', gate: true, skipped: 'no-history' }]);
+    // What `verdict` does with `plan`'s `scenarios` and `skipped` outputs, every planned scenario passing.
+    const planned = out.scenarios.map((s) => ({ id: s.id, gate: s.gate }));
+    const passes = planned.map((s) => ({ schema: 'kanon-e2e-result/v1', scenario: s.id, result: 'pass' }));
+    expect(judge({ trigger: out.trigger, ...withSkipped(planned, passes, out.skipped), startResult: 'success' })).toMatchObject({
+      verdict: 'fail', reason: 'skipped: review-real (no-history)',
+    });
   });
 
   it('the Owner\'s dispatch starts a scenario with no recorded cost, alone', async () => {

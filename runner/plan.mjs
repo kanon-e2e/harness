@@ -29,7 +29,7 @@
 // run would hold is admitted or refused before any repository is created. One refused for its
 // expected cost is left out of the matrix and handed to `verdict` as `skipped: budget`; one with
 // no recorded cost runs only on a dispatch, alone, and is otherwise left out, with the reason in
-// the summary. A refused scenario gets no repository and no model token.
+// the summary. A gating one refused for any reason is handed to `verdict` too (#107). A refused scenario gets no repository and no model token.
 //
 //   node runner/plan.mjs   (reads EVENT, SCHEDULE, RELEASE, SELECT, GITHUB_RUN_ID, GH_TOKEN;
 //                           writes GITHUB_OUTPUT, the step summary and MARKER_DIR/marker.json)
@@ -93,7 +93,7 @@ const entry = (s) => ({ id: s.id, apps: s.apps, claude: s.claude, gate: s.gate =
 /**
  * `authorLabels` is the planned scenarios whose `authorLabel` the `author-label` job applies after
  * phase 1, for its matrix. `left` is the `gate: false` scenarios the cap left out of this run, by
- * id; `skipped` is the scenarios the ledger refused for their cost, each with its `skipped` word, for `verdict`;
+ * id; `skipped` is the scenarios the ledger refused for their cost, and the gating ones it refused for any reason (#107), each with its `skipped` word, for `verdict`;
  * `ledger` is every real-model scenario's admission or refusal, with its reason.
  * @typedef {{ go: boolean, trigger: string, release: string, candidateSha: string, scenarios: any[], modelScenarios: any[], authorLabels: Array<{ id: string, head: string, label: string }>, left: string[], skipped: any[], ledger: Array<{ id: string, started: boolean, reason: string }>, marker: string, reason: string }} Decision
  */
