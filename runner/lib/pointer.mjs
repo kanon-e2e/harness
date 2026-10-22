@@ -5,12 +5,15 @@
  * The fields that hold free text, in Kanon's JSON (`docs/cli-json.md`: a finding's `message` and
  * its `fix`, doctor's `checking`, `notes` and an unchecked check's `reason`, init's `summary`,
  * `failures`, a file's `content` and `diff`, the catalogue's `does`, the error document's `error`)
- * and in GitHub's (a comment's or a pull request's `body`, a title, a description, a commit's
- * `message`, a check run's `output`). A pointer through any of them is refused, whatever follows.
+ * and in GitHub's (a comment's or a pull request's `body`, and its `body_text` and `body_html`, a
+ * title, and a workflow run's `display_title`, filled from a commit's message or a pull request's
+ * title, a description, a commit's `message`, a check run's `output`). A pointer through any of them
+ * is refused, whatever follows.
  */
 export const FREE_TEXT_FIELDS = Object.freeze([
-  'body', 'checking', 'comment', 'content', 'description', 'details', 'diff', 'does', 'error', 'failures',
-  'fix', 'log', 'message', 'notes', 'output', 'prose', 'reason', 'summary', 'text', 'title',
+  'body', 'body_html', 'body_text', 'checking', 'comment', 'content', 'description', 'details', 'diff',
+  'display_title', 'does', 'error', 'failures', 'fix', 'log', 'message', 'notes', 'output', 'prose',
+  'reason', 'summary', 'text', 'title',
 ]);
 
 /** The pointer's tokens, or null when it isn't one. A pointer to the whole document isn't taken. @param {unknown} pointer */
