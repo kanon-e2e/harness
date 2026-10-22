@@ -1,7 +1,7 @@
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { decide, fitCap } from '../runner/plan.mjs';
+import { decide, fitCap, markerOf } from '../runner/plan.mjs';
 import { maxScenarios, SETTINGS } from '../runner/sizing.mjs';
 import { fail, stubGh } from './helpers/stubs.mjs';
 
@@ -322,6 +322,16 @@ describe('the real-model ledger in `plan` (§6.2, E10)', () => {
     expect(out.modelScenarios).toEqual([]);
     expect(out.skipped).toEqual([{ id: 'review-real', gate: false, skipped: 'budget' }]);
     expect(out.ledger[0]).toMatchObject({ id: 'review-real', started: false, reason: expect.stringMatching(/^skipped: budget.*\$2\.10/) });
+  });
+
+  it('records a scenario refused as `skipped: budget` in the run\'s marker, beside the ones it planned, for `burn-in` (#111)', async () => {
+    const out = await nightly(world({ history: [1.4] }));
+    expect(markerOf(out)).toEqual({
+      marker: `e2e-nightly-${MAIN}`, trigger: 'nightly', release: out.release, candidateSha: '',
+      scenarios: ['deploy-rehearsal', 'install-review'], skipped: [{ id: 'review-real', skipped: 'budget' }],
+    });
+    // One refused with no `skipped` word isn't handed to `verdict`, so the marker doesn't list it either.
+    expect(markerOf(await nightly(world()))).toMatchObject({ scenarios: ['deploy-rehearsal', 'install-review'], skipped: [] });
   });
 
   it('the poll and the nightly never start a scenario with no recorded cost, and say why; nothing reads it as `skipped`', async () => {
