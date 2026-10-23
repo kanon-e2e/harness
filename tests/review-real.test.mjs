@@ -54,11 +54,11 @@ describe('review-real', () => {
     expect(s.phases.flatMap((p) => [...p.kanon, ...p.act]).filter((x) => x.verb === 'pr.label')).toEqual([]);
   });
 
-  it('phase 2 waits for the run the Author\'s label started, whatever other label runs exist; phase 3 holds the row first, so its cost is kept whatever the run did, then the run and the verdict', () => {
+  it('phase 2 waits for the run the Author\'s label started, whatever other label runs exist; phase 3 holds the row first, so its cost is kept whatever the run did, reading the review job when there is none, so a refused label fails first as a refusal; then the run and the verdict', () => {
     expect(s.phases[1].kanon).toEqual([]);
     expect(s.phases[1].act).toEqual([{ verb: 'run.await', name: 'review', workflow: 'agent-review.yml', event: 'pull_request_target', pr: 'note', actor: 'author', deadline: 25 }]);
     expect(s.phases[2].act.map((x) => x.verb)).toEqual(['expect.row', 'expect.run', 'expect.pr']);
-    expect(s.phases[2].act[0]).toEqual({ verb: 'expect.row', run: 'review', lane: 'review', ceilingUsd: 30, deadline: 5 });
+    expect(s.phases[2].act[0]).toEqual({ verb: 'expect.row', run: 'review', lane: 'review', job: 'review / review', ceilingUsd: 30, deadline: 5 });
     expect(s.phases[2].act[2]).toEqual({ verb: 'expect.pr', pr: 'note', marker: 'role:reviewer', markerBy: 'kanon-e2e-judge', deadline: 5 });
   });
 
@@ -102,7 +102,7 @@ describe('review-real\'s expectations on a reviewed run, and on runs that must f
     [`GET repos/${REPO}/actions/runs/${RUN}`]: { id: RUN, status: 'completed', conclusion },
     [`GET repos/${REPO}/actions/runs/${RUN}/jobs?per_page=100`]: { jobs: jobs.map(([name, c], i) => ({ id: 100 + i, name, conclusion: c })) },
   }).gh;
-  const [, run, verdict] = s.phases[2].act;
+  const [row, run, verdict] = s.phases[2].act;
   const holdRun = (gh) => VOCABULARY['expect.run'].run(bare(run), context({ gh, state: { runs: { review: RUN } } }));
   const prOf = (reviews) => stubGh({
     [`GET repos/${REPO}/pulls/4`]: { state: 'open', merged: false, labels: [{ name: 'review:please' }], user: { login: 'kanon-e2e-driver[bot]' }, body: '' },
@@ -127,6 +127,17 @@ describe('review-real\'s expectations on a reviewed run, and on runs that must f
     const ctx = context({ gh: g.gh, state: { prs: { note: 4 } } });
     await VOCABULARY['run.await'].run(bare(awaited), ctx);
     expect(ctx.state.runs.review).toBe(2);
+  });
+
+  it('the row: a run whose gate refused the label (`review / review` skipped) fails at once, saying the job was skipped, not at the row\'s deadline (harness #105)', async () => {
+    const { gh } = stubGh({
+      [`GET repos/${REPO}/actions/runs/${RUN}/artifacts?per_page=100`]: { artifacts: [] },
+      [`GET repos/${REPO}/actions/runs/${RUN}/jobs?per_page=100`]: { jobs: [{ id: 1, name: 'review / filter', conclusion: 'success' }, { id: 2, name: 'review / notify-unlabeled', conclusion: 'skipped' }, { id: 3, name: 'review / review', conclusion: 'skipped' }] },
+    });
+    const ctx = context({ gh, state: { runs: { review: RUN } } });
+    const start = ctx.now();
+    await expect(VOCABULARY['expect.row'].run(bare(row), ctx)).rejects.toMatchObject({ ...fails, message: expect.stringMatching(/job `review \/ review` was skipped/) });
+    expect(ctx.now()).toBe(start);
   });
 
   it('the run: passes when the review ran; fails when the gate refused the label, or the agent failed', async () => {
