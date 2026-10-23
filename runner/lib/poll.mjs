@@ -1,6 +1,7 @@
 // How a verb waits (Kanon plan 0012 §10): every read after a write polls, never sleeps a fixed
 // time. It asks its predicate, backs off from 2 to 30 seconds, and asks again until the predicate
-// holds or the deadline passes. A deadline that passes is `fail`, not `infra`. A 404 on a read is
+// holds or the deadline passes. A deadline that passes is `fail`, not `infra`, save on a wait for a
+// push GitHub never delivered (`runner/lib/push.mjs`, #115). A 404 on a read is
 // a subject that doesn't exist yet, such as a branch a workflow creates later, so the predicate
 // doesn't hold yet; any other error a probe throws is the runner's to classify (#16, #19).
 
