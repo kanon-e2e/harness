@@ -7,7 +7,7 @@ import { environmentJobs, environmentOf, readWorkflows, workflowFiles, workflowT
  * the harness copies its assertions and runs them on its own:
  *
  *   • no job that holds an App's key runs someone else's code (the copy of Kanon's check);
- *   • each environment is named only by the jobs §5.2 lists, and by the probes' jobs;
+ *   • each environment is named only by the jobs §5.2 lists;
  *   • no `-job` workflow names a private key: it is handed a token, never a key;
  *   • no workflow runs on `pull_request`, `pull_request_target` or `merge_group` with a secret.
  *
@@ -53,9 +53,10 @@ const violations = (all) =>
 // ── Which jobs may name an environment ───────────────────────────────────────────────────────
 
 /**
- * Plan 0012 §5.2's jobs, each with the one environment it may name, then the probes' (E0, Kanon
- * #968). `*` stands for a workflow's one job, whose name §5.2 doesn't fix: such a file must hold
- * exactly one job. Nothing else may name an environment, and no job here may name another.
+ * Plan 0012 §5.2's jobs, each with the one environment it may name. `*` stands for a workflow's
+ * one job, whose name §5.2 doesn't fix: such a file must hold exactly one job. Nothing else may
+ * name an environment, and no job here may name another. E0's probes named `e2e` and
+ * `e2e-report` too, until they were retired (#7): a probe added again must be listed here.
  */
 const ALLOWED = [
   // `e2e.yml`: `start` and `report` mint the Reporter's token; `provision` the driver's.
@@ -71,21 +72,6 @@ const ALLOWED = [
   ['e2e-author-label-run.yml', 'mint', 'e2e'],
   // The one job that writes the real-model key.
   ['e2e-model-key-job.yml', '*', 'e2e-model'],
-  // The probes.
-  ['probe-01-repo-lifecycle.yml', 'probe', 'e2e'],
-  ['probe-03-token-lifetime.yml', 'probe', 'e2e'],
-  ['probe-04-repo-rate-limit.yml', 'probe', 'e2e'],
-  ['probe-07-release-approval.yml', 'probe', 'e2e'],
-  ['probe-09-doctor-unchecked.yml', 'create', 'e2e'],
-  ['probe-09-doctor-unchecked.yml', 'doctor', 'e2e'],
-  ['probe-09-doctor-unchecked.yml', 'cleanup', 'e2e'],
-  ['probe-11-rulesets.yml', 'probe', 'e2e'],
-  ['probe-12-env-in-called-workflow-callee.yml', 'read', 'e2e'],
-  ['probe-13-reporter-check-run.yml', 'start', 'e2e-report'],
-  ['probe-13-reporter-check-run.yml', 'finish', 'e2e-report'],
-  ['probe-14-admin-workflow-routes.yml', 'probe', 'e2e'],
-  ['probe-15-token-narrowing.yml', 'probe', 'e2e'],
-  ['probe-19-doctor-readonly.yml', 'probe', 'e2e'],
 ];
 
 /** Every `file:job` naming an environment it may not, with the environment. */
@@ -125,7 +111,7 @@ const eventsOf = (doc) => {
  * only when it is exactly that: a call of `yedeya-labs/kanon/.github/workflows/<lane>@<ref>`
  * whose secrets are each mapped by its own name, with no step, no `env:` and no environment,
  * and no secret anywhere else in the workflow. Everything else the harness writes (the e2e
- * workflows, the probes, CI) gets no secret on these events at all.
+ * workflows, CI) gets no secret on these events at all.
  */
 const KANON_LANE = /^yedeya-labs\/kanon\/\.github\/workflows\/[\w.-]+\.ya?ml@[\w.-]+$/;
 const isKanonLaneCall = (job) => {
@@ -152,7 +138,7 @@ const secretsOnPullRequests = (all) => Object.entries(all).flatMap(([f, doc]) =>
 describe('no job that holds an App key runs someone else\'s code (Kanon\'s check, copied)', () => {
   it('finds the jobs it is about, so the check is not vacuous', () => {
     const keyed = Object.entries(docs).flatMap(([f, d]) => Object.entries(d?.jobs ?? {}).filter(([, j]) => holdsKey(j)).map(([n]) => `${f}:${n}`));
-    expect(keyed).toEqual(expect.arrayContaining(['probe-01-repo-lifecycle.yml:probe', 'probe-13-reporter-check-run.yml:start', 'apps-check.yml:apps', 'release.yml:release']));
+    expect(keyed).toEqual(expect.arrayContaining(['e2e-act-run.yml:mint', 'e2e.yml:start', 'apps-check.yml:apps', 'release.yml:release']));
   });
 
   it('holds for every job, with no exception', () => {
@@ -160,10 +146,10 @@ describe('no job that holds an App key runs someone else\'s code (Kanon\'s check
   });
 });
 
-describe('each environment is named only by the jobs plan 0012 §5.2 lists, the probes included', () => {
+describe('each environment is named only by the jobs plan 0012 §5.2 lists', () => {
   it('finds the jobs that name one, so the check is not vacuous', () => {
     const named = environmentJobs(docs).map(({ file, job }) => `${file}:${job}`);
-    expect(named).toEqual(expect.arrayContaining(['probe-01-repo-lifecycle.yml:probe', 'probe-13-reporter-check-run.yml:start', 'probe-12-env-in-called-workflow-callee.yml:read']));
+    expect(named).toEqual(expect.arrayContaining(['e2e.yml:provision', 'e2e.yml:start', 'e2e-model-key-job.yml:write']));
   });
 
   it('holds for every job', () => {

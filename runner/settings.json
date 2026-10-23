@@ -50,7 +50,7 @@
     "neutralRerunAfterMinutes": "Plan 0012 §7: a neutral check run is re-run by the poll, at most hourly.",
     "nightlyFloorDays": "Plan 0012 §7, decision 4: a nightly runs when Kanon's main changed, or when no nightly ran in seven days.",
     "reporterAppSlug": "E0's item 13 (Kanon #968): the Reporter's check run carries the App kanon-e2e-reporter.",
-    "environmentReviewer": "Plan 0012 decision 9, as the Owner amended it on 2026-10-20: environment.create names the Owner's login as a production environment's required reviewer, so production's deploy job waits and deployment.await-approval can see the wait and cancel the run. No person approves anything. Probe 7 (.github/workflows/probe-07-release-approval.yml, Kanon #968) measured that the Owner can approve such a deploy, and takes this login as its reviewer by default.",
+    "environmentReviewer": "Plan 0012 decision 9, as the Owner amended it on 2026-10-20: environment.create names the Owner's login as a production environment's required reviewer, so production's deploy job waits and deployment.await-approval can see the wait and cancel the run. No person approves anything. Probe 7 (retired; probes/README.md item 7, answered on Kanon #968) measured that the Owner can approve such a deploy, with this login as its reviewer.",
     "schedules": "Plan 0012 §7: the poll every 15 minutes (decision 19), and the nightly once a day, off the poll's minutes so the two never fire together."
   }
 }

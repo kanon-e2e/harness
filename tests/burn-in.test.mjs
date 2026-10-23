@@ -298,7 +298,7 @@ describe('what counts and what neither counts nor breaks', () => {
 
   it('reads only `e2e.yml`\'s completed runs on `main`', async () => {
     const out = await burnIn([
-      ...passes(5), run(6, { branch: 'fix', result: 'fail' }), run(7, { path: '.github/workflows/probe-13-reporter-check-run.yml', result: 'fail' }),
+      ...passes(5), run(6, { branch: 'fix', result: 'fail' }), run(7, { path: '.github/workflows/ci.yml', result: 'fail' }),
       run(8, { status: 'in_progress', result: null }), ...passes(5, 9),
     ]);
     expect(out.streak).toBe(10);
