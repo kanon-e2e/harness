@@ -22,7 +22,7 @@ import { appendFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-import { GhError, api } from './lib/gh.mjs';
+import { api, notFound } from './lib/gh.mjs';
 import { ghProcess } from './lib/proc.mjs';
 import { retrying } from './lib/retry.mjs';
 import { recordedResult } from './run.mjs';
@@ -83,7 +83,7 @@ export async function readRepositories({ phase, planned, run, phasesOf: count },
     try {
       out[s.id] = { repo: (await api(ctx, `repos/${SETTINGS.organisation}/${repositoryName(s.id, run.id, run.attempt)}`)) ?? {} };
     } catch (e) {
-      out[s.id] = e instanceof GhError && /\bHTTP 404\b/.test(String(e.stderr)) ? { gone: true } : { problem: /** @type {Error} */ (e).message };
+      out[s.id] = notFound(e) ? { gone: true } : { problem: /** @type {Error} */ (e).message };
     }
   }
   return out;

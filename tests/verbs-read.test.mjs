@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { classify } from '../runner/lib/retry.mjs';
 import { VOCABULARY } from '../runner/vocabulary.mjs';
-import { REPO, RELEASE, context, inTurn, stubGh } from './helpers/stubs.mjs';
+import { REPO, RELEASE, context, fail, inTurn, stubGh } from './helpers/stubs.mjs';
 
 /**
  * The verbs that only read, in either kind of segment (Kanon plan 0012 §4.2, §4.3): `run.await`
@@ -167,6 +167,18 @@ describe('run.await', () => {
     await expect(run('run.await', { workflow: 'agent-review.yml', event: 'pull_request_target', pr: 'note', actor: 'author', deadline: 1 }, context({ gh: g.gh, state: { prs: { note: 5 } } })))
       .rejects.toMatchObject(failsWith(/started by kanon-e2e-author\[bot\] yet; 1 started by others: kanon-e2e-driver\[bot\]/));
     expect(VOCABULARY['run.await'].args.actor.enum).toEqual(['author', 'judge', 'releaser']);
+  });
+
+  it('waits through a 404 for a workflow a later commit adds, until its run completes (#19)', async () => {
+    const g = stubGh({
+      [`GET repos/${REPO}/branches/main`]: { commit: { sha: 'abc' } },
+      [RUNS]: inTurn(fail('gh: Not Found (HTTP 404)'), { workflow_runs: [{ id: 5, run_number: 1, status: 'completed' }] }),
+    });
+    const ctx = context({ gh: g.gh });
+    await run('run.await', { name: 'ci', workflow: 'ci.yml', event: 'push', branch: 'main', deadline: 10 }, ctx);
+    expect(ctx.state.runs).toEqual({ ci: 5 });
+    await expect(run('run.await', { workflow: 'ci.yml', event: 'push', branch: 'main', deadline: 1 }, context({ gh: stubGh({ [`GET repos/${REPO}/branches/main`]: { commit: { sha: 'abc' } }, [RUNS]: fail('gh: Not Found (HTTP 404)') }).gh })))
+      .rejects.toMatchObject(failsWith(/deadline.*ci\.yml.*HTTP 404/));
   });
 
   it('fails when the deadline passes', async () => {
@@ -379,6 +391,34 @@ describe('expect.api', () => {
     await run('expect.api', { path: 'repos/{{repository}}/', pointer: '/topics', equals: ['kanon-e2e'], deadline: 1 }, context({ gh: g.gh }));
     await expect(run('expect.api', { path: 'repos/{{repository}}/', pointer: '/allow_squash_merge', equals: false, deadline: 1 }, context({ gh: g.gh })))
       .rejects.toMatchObject(failsWith(/\/allow_squash_merge.*false.*true/));
+  });
+
+  it('waits through a 404 for a resource a workflow creates later, and holds it once it appears (#19)', async () => {
+    const g = stubGh({ [`GET repos/${REPO}/branches/release`]: inTurn(fail('gh: Not Found (HTTP 404)'), fail('gh: Not Found (HTTP 404)'), { name: 'release' }) });
+    const ctx = context({ gh: g.gh });
+    await run('expect.api', { path: 'repos/{{repository}}/branches/release', pointer: '/name', equals: 'release', deadline: 5 }, ctx);
+    expect(g.calls).toHaveLength(3);
+    expect(ctx.clock.sleeps).toEqual([2000, 4000]);
+  });
+
+  it('fails as `Fail` at its deadline when the resource never appears, naming the 404 it last saw (#19)', async () => {
+    const g = stubGh({ [`GET repos/${REPO}/branches/release`]: fail('gh: Not Found (HTTP 404)') });
+    const ctx = context({ gh: g.gh });
+    const start = ctx.now();
+    const e = await run('expect.api', { path: 'repos/{{repository}}/branches/release', pointer: '/name', equals: 'release', deadline: 1 }, ctx).catch((x) => x);
+    expect(e).toMatchObject(failsWith(/deadline of 1 minute.*branches\/release.*HTTP 404/));
+    expect(classify(e)).toBe('fail');
+    expect(ctx.now() - start).toBe(60_000);
+  });
+
+  it('leaves any other `gh` error to the runner (#16): a 502 the retries outlast is thrown at once and reads `infra`', async () => {
+    const g = stubGh({ [`GET repos/${REPO}/branches/release`]: fail('gh: Server Error (HTTP 502)') });
+    const ctx = context({ gh: g.gh });
+    const e = await run('expect.api', { path: 'repos/{{repository}}/branches/release', pointer: '/name', equals: 'release', deadline: 5 }, ctx).catch((x) => x);
+    expect(e.name).toBe('GhError');
+    expect(classify(e)).toBe('infra');
+    expect(g.calls).toHaveLength(1);
+    expect(ctx.clock.sleeps).toEqual([]);
   });
 
   it('refuses at run time too a path outside the scenario repository, calling nothing', async () => {
