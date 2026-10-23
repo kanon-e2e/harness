@@ -14,6 +14,12 @@
 //     run is the Owner's, with nothing else against the cap;
 //   - at most `maxModelScenarios` (decision 15) start in one run.
 //
+// A GATING SCENARIO IS NEVER REFUSED IN SILENCE (#107). The `gate: true` scenarios are admitted
+// before the others, so a `gate: false` one earlier in the catalogue never takes a gating one's
+// place under the cap or the two. One still refused carries a `skipped` word whatever the reason
+// (`budget`, `no-history`, `max-model`), so `plan` hands it to `verdict`, which reads it as `fail`
+// on a candidate's run. A `gate: false` one refused for no history or for the two carries none.
+//
 // It is soft: a run that goes past its own history can still spend up to its lane's ceiling ($30
 // for the Reviewer) before the ledger sees it. The lane's `--max-budget-usd` is the hard bound on
 // one run; the subscription's usage limits are the month's.
@@ -55,7 +61,7 @@ const usd = (usd) => `$${usd.toFixed(2)}`;
  */
 
 /**
- * Which real-model scenarios start, in catalogue order.
+ * Which real-model scenarios start: the gating ones first, then the others, each in catalogue order.
  * @param {{ kind: 'poll' | 'nightly' | 'dispatch', models: Entry[], history: Record<string, number[]> }} input
  *   `history` holds each scenario's recorded costs, newest first
  * @param {typeof SETTINGS} [s]
@@ -69,17 +75,21 @@ export function admit({ kind, models, history }, s = SETTINGS) {
   const refused = [];
   let sum = 0;
   const refuse = (/** @type {Entry} */ m, /** @type {string | null} */ skipped, /** @type {string} */ reason) => refused.push({ id: m.id, gate: m.gate === true, skipped, reason });
-  for (const m of models) {
+  // A gating scenario's refusal always reaches `verdict` (#107); a `gate: false` one's only for its cost.
+  const hold = (/** @type {Entry} */ m, /** @type {string} */ skipped, /** @type {string} */ reason) => (m.gate === true
+    ? refuse(m, skipped, `${reason}; it gates, so \`verdict\` reads it as \`skipped: ${skipped}\``)
+    : refuse(m, null, reason));
+  for (const m of [...models.filter((x) => x.gate === true), ...models.filter((x) => x.gate !== true)]) {
     const expected = expectedCost(history[m.id] ?? [], s.ledger);
     if (expected === null) {
       // No recorded cost: the Owner's dispatch, alone (§6.2).
-      if (kind !== 'dispatch') refuse(m, null, `not started: no recorded cost yet, so its first run is a dispatch the Owner starts, alone (Kanon plan 0012 §6.2); a ${kind} never starts it`);
-      else if (models.length > 1) refuse(m, null, `not started: no recorded cost yet, so its first run is dispatched alone, with no other real-model scenario against the $${cap} cap; this dispatch selects ${models.length}`);
+      if (kind !== 'dispatch') hold(m, 'no-history', `not started: no recorded cost yet, so its first run is a dispatch the Owner starts, alone (Kanon plan 0012 §6.2); a ${kind} never starts it`);
+      else if (models.length > 1) hold(m, 'no-history', `not started: no recorded cost yet, so its first run is dispatched alone, with no other real-model scenario against the $${cap} cap; this dispatch selects ${models.length}`);
       else admitted.push({ id: m.id, expectedUsd: null, reason: `started: its first run, dispatched alone, with no recorded cost to expect from` });
       continue;
     }
     if (admitted.length >= s.maxModelScenarios) {
-      refuse(m, null, `not started: at most ${s.maxModelScenarios} real-model scenarios a run (decision 15)`);
+      hold(m, 'max-model', `not started: at most ${s.maxModelScenarios} real-model scenarios a run (decision 15)`);
       continue;
     }
     if (sum + expected > cap) {

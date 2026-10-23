@@ -59,7 +59,7 @@ jobs:
       candidate-sha: ${{ steps.plan.outputs.candidate-sha }}
       scenarios: ${{ steps.plan.outputs.scenarios }}
       model-scenarios: ${{ steps.plan.outputs.model-scenarios }}
-      # The real-model scenarios the ledger refused for their cost (runner/ledger.mjs), for verdict.
+      # The real-model scenarios the ledger refused for their cost, or gating ones for any reason (runner/ledger.mjs), for verdict.
       skipped: ${{ steps.plan.outputs.skipped }}
       # The planned scenarios whose `authorLabel` the Author applies after phase 1 (E10).
       author-labels: ${{ steps.plan.outputs.author-labels }}

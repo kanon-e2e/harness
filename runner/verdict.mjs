@@ -6,9 +6,10 @@
 // planned scenario counts.
 //
 //   pass        every scenario that counts read `pass`;
-//   fail        one read `fail`, or `skipped` (E10's ledger: `skipped: budget`); or a candidate's
-//               run has no gating scenario ("no scenario gates yet"); or the candidate's red issue
-//               holds an open `fail`, whatever this run's scenarios did;
+//   fail        one read `fail`, or `skipped` (E10's ledger: `budget`, or `no-history` or
+//               `max-model` on a gating one, #107); or a candidate's run has no gating scenario
+//               ("no scenario gates yet"); or the candidate's red issue holds an open `fail`,
+//               whatever this run's scenarios did;
 //   infra-only  nothing failed, but one read `infra` or left no result, or its `pass` was
 //               unconfirmed, or `start` failed, so the Reporter couldn't post. Never `pass`.
 //
@@ -324,8 +325,8 @@ export const readResults = (dir) => {
 };
 
 /**
- * The scenarios `plan`'s real-model ledger refused for their cost (E10), joined to the planned
- * ones and their results: each is planned, with its `gate` from `plan`, and reads `skipped` with
+ * The scenarios `plan`'s real-model ledger refused with a `skipped` word (E10, #107), joined to the
+ * planned ones and their results: each is planned, with its `gate` from `plan`, and reads `skipped` with
  * the ledger's word. No repository was made for it, so no result of its own can exist; one that
  * claims to (harness #24) is set aside for `plan`'s word.
  * @param {Array<{ id: string, gate?: unknown }>} planned @param {any[]} results

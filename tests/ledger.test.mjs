@@ -104,6 +104,34 @@ describe('a scenario with no history runs only by the Owner\'s dispatch (E10)', 
   });
 });
 
+describe('a gating real-model scenario the ledger refuses reaches `verdict` (#107)', () => {
+  it('one with no recorded cost is refused with a `skipped` word, `no-history`, on the poll, the nightly, and a dispatch beside another', () => {
+    for (const kind of /** @type {const} */ (['poll', 'nightly'])) {
+      expect(admit({ kind, models: [m('g', true)], history: {} }).refused, kind).toEqual([{ id: 'g', gate: true, skipped: 'no-history', reason: expect.stringMatching(/no recorded cost.*it gates, so `verdict` reads it as `skipped: no-history`/) }]);
+    }
+    const out = admit({ kind: 'dispatch', models: [m('g', true), m('old')], history: { old: [0.5] } });
+    expect(out.refused).toEqual([{ id: 'g', gate: true, skipped: 'no-history', reason: expect.stringMatching(/dispatched alone/) }]);
+  });
+
+  it('one past decision 15\'s two is refused with a `skipped` word, `max-model`; a `gate: false` one still reads none', () => {
+    const out = admit({ kind: 'nightly', models: [m('a', true), m('b', true), m('c', true), m('d')], history: { a: [0.01], b: [0.01], c: [0.01], d: [0.01] } });
+    expect(out.admitted.map((x) => x.id)).toEqual(['a', 'b']);
+    expect(out.refused).toEqual([
+      { id: 'c', gate: true, skipped: 'max-model', reason: expect.stringMatching(/at most 2/) },
+      { id: 'd', gate: false, skipped: null, reason: expect.stringMatching(/at most 2/) },
+    ]);
+  });
+
+  it('admits the gating ones before the others, so a `gate: false` scenario earlier in the catalogue never takes a gating one\'s place', () => {
+    const two = admit({ kind: 'nightly', models: [m('a'), m('b'), m('g', true)], history: { a: [0.01], b: [0.01], g: [0.01] } });
+    expect(two.admitted.map((x) => x.id)).toEqual(['g', 'a']);
+    expect(two.refused).toEqual([{ id: 'b', gate: false, skipped: null, reason: expect.stringMatching(/at most 2/) }]);
+    const budget = admit({ kind: 'nightly', models: [m('a'), m('g', true)], history: { a: [1.0], g: [1.0] } });
+    expect(budget.admitted.map((x) => x.id)).toEqual(['g']);
+    expect(budget.refused).toMatchObject([{ id: 'a', gate: false, skipped: 'budget' }]);
+  });
+});
+
 describe('the history: each scenario\'s recorded costs, from its result artifacts', () => {
   const H = 'repos/kanon-e2e/harness';
   const NAME = 'kanon-e2e-result-review-real';
