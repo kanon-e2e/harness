@@ -56,7 +56,7 @@ const world = (runs, { rels = [['v0.40.1', -100], ['candidate-v0.40.2', -50], ['
     return own.map((a, i) => ({ id: r.id * 10 + i, ...a, workflow_run: { id: r.id, head_branch: r.branch, head_sha: `h${r.id}` } }));
   });
   const files = Object.fromEntries(runs.flatMap((r) => [
-    [`${r.id} ${artifacts.find((a) => a.workflow_run.id === r.id && a.name.startsWith('e2e-'))?.name}`, { 'marker.json': JSON.stringify({ trigger: r.trigger, release: r.release, scenarios: r.scenarios }) }],
+    [`${r.id} ${artifacts.find((a) => a.workflow_run.id === r.id && a.name.startsWith('e2e-'))?.name}`, { 'marker.json': JSON.stringify({ trigger: r.trigger, release: r.release, scenarios: r.scenarios, ...(r.skipped === undefined ? {} : { skipped: r.skipped }) }) }],
     [`${r.id} kanon-e2e-result-${ID}`, { 'result.json': r.resultFile ?? JSON.stringify({ scenario: ID, release: r.release, trigger: r.trigger, run: { id: String(r.id), attempt: r.resultAttempt }, result: r.result }) }],
   ]));
   const routes = {
@@ -113,16 +113,38 @@ describe('the run of passes (§10, the Owner\'s rule of 2026-10-18)', () => {
     expect(out.rows.map((r) => [r.run, r.result, r.pass])).toContainEqual([4, 'fail', false]);
   });
 
-  it('breaks the run on `infra`, on `skipped`, and on a run that planned the scenario and left no result: only a pass counts', async () => {
-    for (const o of [{ result: 'infra' }, { result: 'skipped' }, { result: null }]) {
+  it('breaks the run on `infra`, and on a run that planned the scenario and left no result: only a pass counts', async () => {
+    for (const o of [{ result: 'infra' }, { result: null }]) {
       const out = await burnIn([...passes(3), run(4, o), ...passes(2, 5)]);
       expect(out.streak, JSON.stringify(o)).toBe(2);
       expect(out.rows.find((r) => r.run === 4)).toMatchObject({ pass: false, result: o.result ?? 'no result' });
     }
   });
 
-  it('breaks the run on a result it can\'t read, or one that names another scenario', async () => {
-    for (const resultFile of ['{ not json', JSON.stringify({ scenario: 'install-build', result: 'pass' })]) {
+  it('breaks the run on `skipped`: a run whose ledger refused the scenario for its cost, as its marker records (#111)', async () => {
+    // `plan` leaves a refused scenario out of `scenarios`, and lists it in `skipped`; no job writes its result.
+    const out = await burnIn([...passes(3), run(4, { scenarios: [], skipped: [{ id: ID, skipped: 'budget' }], result: null }), ...passes(2, 5)]);
+    expect(out.streak).toBe(2);
+    expect(out.burntIn).toBe(false);
+    expect(out.rows.find((r) => r.run === 4)).toMatchObject({ pass: false, result: 'skipped' });
+  });
+
+  it('a run whose ledger refused another scenario, or whose marker predates its `skipped` list, reads as it did', async () => {
+    const other = await burnIn([...passes(5), run(6, { scenarios: ['install-build'], skipped: [{ id: 'review-real', skipped: 'budget' }], result: 'fail' }), ...passes(5, 7)]);
+    expect(other.streak).toBe(10);
+    expect(other.rows.map((r) => r.run)).not.toContain(6);
+    const planned = await burnIn([...passes(3), run(4, { skipped: [{ id: 'review-real', skipped: 'budget' }] }), ...passes(2, 5)]);
+    expect(planned.streak).toBe(6);
+  });
+
+  it('breaks the run on a marker whose `skipped` isn\'t a list', async () => {
+    const out = await burnIn([...passes(3), run(4, { skipped: 'budget' }), ...passes(2, 5)]);
+    expect(out.streak).toBe(2);
+    expect(out.rows.find((r) => r.run === 4)).toMatchObject({ pass: false, result: 'unreadable' });
+  });
+
+  it('breaks the run on a result it can\'t read, one that names another scenario, or one that reads `skipped`: no job writes it', async () => {
+    for (const resultFile of ['{ not json', JSON.stringify({ scenario: 'install-build', result: 'pass' }), JSON.stringify({ scenario: ID, run: { id: '4', attempt: '1' }, result: 'skipped' })]) {
       const out = await burnIn([...passes(3), run(4, { resultFile }), ...passes(2, 5)]);
       expect(out.streak).toBe(2);
       expect(out.rows.find((r) => r.run === 4)).toMatchObject({ pass: false, result: 'unreadable' });

@@ -223,6 +223,16 @@ export async function decide(input, deps) {
   return go({ release, marker, reason: `Kanon's main is ${main.slice(0, 12)}; running ${release}` });
 }
 
+/**
+ * The run's `marker.json`: what it planned, and what the ledger refused as `skipped`, which no
+ * job's result records, so `burn-in` reads it from here (#111).
+ * @param {Decision} d
+ */
+export const markerOf = (d) => ({
+  marker: d.marker, trigger: d.trigger, release: d.release, candidateSha: d.candidateSha,
+  scenarios: d.scenarios.map((s) => s.id), skipped: d.skipped.map((s) => ({ id: s.id, skipped: s.skipped })),
+});
+
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const env = process.env;
   const catalogue = scenarioDirs().map((d) => loadScenario(d).scenario);
@@ -236,7 +246,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   if (env.GITHUB_OUTPUT) appendFileSync(env.GITHUB_OUTPUT, `${out.join('\n')}\n`);
   if (d.go && env.MARKER_DIR) {
     mkdirSync(env.MARKER_DIR, { recursive: true });
-    writeFileSync(join(env.MARKER_DIR, 'marker.json'), `${JSON.stringify({ marker: d.marker, trigger: d.trigger, release: d.release, candidateSha: d.candidateSha, scenarios: d.scenarios.map((s) => s.id) }, null, 2)}\n`);
+    writeFileSync(join(env.MARKER_DIR, 'marker.json'), `${JSON.stringify(markerOf(d), null, 2)}\n`);
   }
   if (env.GITHUB_STEP_SUMMARY) {
     const ledger = d.ledger.length ? `\n### The real-model ledger ($${SETTINGS.ledger.capUsd} a run)\n\n${d.ledger.map((l) => `- \`${l.id}\`: ${l.reason}`).join('\n')}\n` : '';
