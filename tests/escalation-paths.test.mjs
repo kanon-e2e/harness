@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { environmentJobs, readWorkflows, workflowFiles } from './helpers/workflows.mjs';
+import { environmentJobs, readWorkflows } from './helpers/workflows.mjs';
 
 /**
  * The harness's escalation file (`K-LAYOUT-8`) keeps everything that runs with the driver's key
@@ -55,10 +55,6 @@ const E2E = [
   'e2e-janitor-run.yml', 'e2e-janitor-job.yml', 'e2e-model-key-run.yml', 'e2e-model-key-job.yml',
   'e2e-a-pair-added-later-run.yml', 'e2e-a-pair-added-later-job.yml',
 ].map((f) => `.github/workflows/${f}`);
-const PROBES = [
-  ...workflowFiles().filter((f) => f.startsWith('probe-')),
-  'probe-99-a-probe-added-later.yml',
-].map((f) => `.github/workflows/${f}`);
 /** Every workflow that names an environment reads that environment's keys. */
 const ENVIRONMENT_READERS = [...new Set(environmentJobs(readWorkflows()).map(({ file }) => `.github/workflows/${file}`))];
 
@@ -80,13 +76,8 @@ describe('the escalation paths keep what runs with the driver key the Owner\'s',
     expect(notAlways(entries, E2E)).toEqual([]);
   });
 
-  it('marks the `probe-*.yml` workflows `always`, by pattern', () => {
-    expect(PROBES.length).toBeGreaterThan(1);
-    expect(notAlways(entries, PROBES)).toEqual([]);
-  });
-
   it('marks every workflow that reads an environment\'s key `always`', () => {
-    // Not vacuous: the probes read the driver's key from `e2e`, probe 13 the Reporter's from `e2e-report`.
+    // Not vacuous: the `-run` workflows read the driver's key from `e2e`, `e2e.yml` the Reporter's from `e2e-report`.
     expect(ENVIRONMENT_READERS.length).toBeGreaterThan(1);
     expect(notAlways(entries, ENVIRONMENT_READERS)).toEqual([]);
   });
@@ -95,17 +86,17 @@ describe('the escalation paths keep what runs with the driver key the Owner\'s',
 
 describe('the check catches what it is for', () => {
   const file = (...bullets) => ['# Escalation paths', '', '## Escalation paths', '', ...bullets, '', '## Pipeline code', '', '- `scripts/` — x', ''].join('\n');
-  const probe = '.github/workflows/probe-01-repo-lifecycle.yml';
+  const pair = '.github/workflows/e2e-act-run.yml';
 
   it('a pattern without `always`, or with only a category, is not `always`', () => {
-    expect(notAlways(parseEntries(file('- `^\\.github/workflows/probe-` `pipeline` — the probes')), [probe])).toEqual([probe]);
-    expect(notAlways(parseEntries(file('- `^\\.github/workflows/probe-` — the probes')), [probe])).toEqual([probe]);
-    expect(notAlways(parseEntries(file('- `^\\.github/workflows/probe-` `pipeline` `always` — the probes')), [probe])).toEqual([]);
+    expect(notAlways(parseEntries(file('- `^\\.github/workflows/e2e` `pipeline` — the pairs')), [pair])).toEqual([pair]);
+    expect(notAlways(parseEntries(file('- `^\\.github/workflows/e2e` — the pairs')), [pair])).toEqual([pair]);
+    expect(notAlways(parseEntries(file('- `^\\.github/workflows/e2e` `pipeline` `always` — the pairs')), [pair])).toEqual([]);
   });
 
   it('a pattern dropped, or one listed under another heading, covers nothing', () => {
-    expect(notAlways(parseEntries(file('- `^runner/` `always` — the runner')), [probe])).toEqual([probe]);
-    expect(notAlways(parseEntries(file().replace('`scripts/` — x', '`^\\.github/workflows/probe-` `always` — x')), [probe])).toEqual([probe]);
+    expect(notAlways(parseEntries(file('- `^runner/` `always` — the runner')), [pair])).toEqual([pair]);
+    expect(notAlways(parseEntries(file().replace('`scripts/` — x', '`^\\.github/workflows/e2e` `always` — x')), [pair])).toEqual([pair]);
   });
 
   it('a bullet that isn\'t an entry fails by name rather than being skipped', () => {
