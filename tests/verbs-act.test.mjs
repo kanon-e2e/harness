@@ -433,6 +433,39 @@ describe('release.cut', () => {
     expect(ctx.state.prs).toEqual({ release: 12 });
     expect(ctx.state.release).toEqual({ id: 4, tag: 'v0.1.0' });
   });
+
+  describe('when the deadline passes with no Release (#115)', () => {
+    const PUSH_RUNS = `GET repos/${REPO}/actions/runs?event=push&head_sha=92b3573&per_page=1`;
+    const routes = (pushRuns) => stubGh({
+      [`GET repos/${REPO}/pulls?state=open&per_page=100`]: [[{ number: 7, labels: [{ name: 'autorelease: pending' }] }]],
+      'POST graphql': { data: { repository: { pullRequest: { id: 'PR_node7', headRefOid: 'abc1234', isMergeQueueEnabled: false, isInMergeQueue: false, timelineItems: { nodes: [] } } } } },
+      [`pr merge 7 -R ${REPO} --squash --auto`]: undefined,
+      [`GET repos/${REPO}/pulls/7`]: { state: 'closed', merged: true, merged_at: '2026-10-22T09:02:24Z', merge_commit_sha: '92b3573' },
+      [`GET repos/${REPO}/releases?per_page=20`]: [],
+      [PUSH_RUNS]: pushRuns,
+    });
+
+    it('reads `infra` when GitHub delivered no push run of any kind for the merge commit, naming the commit', async () => {
+      const g = routes({ total_count: 0, workflow_runs: [] });
+      const e = await run('release.cut', { deadline: 15 }, context({ gh: g.gh })).catch((x) => x);
+      expect(classify(e)).toBe('infra');
+      expect(e.message).toMatch(/deadline of 15 minutes passed.*no Release since #7 merged.*no push run was delivered for 92b3573/);
+      expect(g.calls.filter((c) => c.key === PUSH_RUNS)).toHaveLength(1);
+    });
+
+    it('stays `fail` when a push run exists for the merge commit: a caller that ran and published nothing is a finding', async () => {
+      const g = routes({ total_count: 1, workflow_runs: [{ id: 9, event: 'push', head_sha: '92b3573' }] });
+      const e = await run('release.cut', { deadline: 15 }, context({ gh: g.gh })).catch((x) => x);
+      expect(e).toMatchObject({ name: 'Fail', message: expect.stringMatching(/no Release since #7 merged$/) });
+      expect(classify(e)).toBe('fail');
+    });
+
+    it('stays `fail` when the push runs can\'t be read', async () => {
+      const g = routes(fail('gh: Server Error (HTTP 502)'));
+      const e = await run('release.cut', { deadline: 15 }, context({ gh: g.gh })).catch((x) => x);
+      expect(classify(e)).toBe('fail');
+    });
+  });
 });
 
 describe('deployment.await-approval', () => {

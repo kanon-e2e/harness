@@ -181,9 +181,28 @@ describe('run.await', () => {
       .rejects.toMatchObject(failsWith(/deadline.*ci\.yml.*HTTP 404/));
   });
 
-  it('fails when the deadline passes', async () => {
-    const g = stubGh({ [`GET repos/${REPO}/branches/main`]: { commit: { sha: 'abc' } }, [RUNS]: { workflow_runs: [] } });
-    await expect(run('run.await', { workflow: 'ci.yml', event: 'push', branch: 'main', deadline: 1 }, context({ gh: g.gh }))).rejects.toMatchObject(failsWith(/deadline.*no run/));
+  const PUSH_RUNS = `GET repos/${REPO}/actions/runs?event=push&head_sha=abc&per_page=1`;
+
+  it('fails when the deadline passes, with a push run of another workflow on the commit (#115)', async () => {
+    const g = stubGh({ [`GET repos/${REPO}/branches/main`]: { commit: { sha: 'abc' } }, [RUNS]: { workflow_runs: [] }, [PUSH_RUNS]: { total_count: 1, workflow_runs: [{ id: 3 }] } });
+    const e = await run('run.await', { workflow: 'ci.yml', event: 'push', branch: 'main', deadline: 1 }, context({ gh: g.gh })).catch((x) => x);
+    expect(e).toMatchObject(failsWith(/deadline.*no run of ci\.yml on push for abc yet$/));
+    expect(classify(e)).toBe('fail');
+  });
+
+  it('reads `infra` when the deadline passes and GitHub delivered no push run of any kind for the commit (#115)', async () => {
+    const g = stubGh({ [`GET repos/${REPO}/branches/main`]: { commit: { sha: 'abc' } }, [RUNS]: { workflow_runs: [] }, [PUSH_RUNS]: { total_count: 0, workflow_runs: [] } });
+    const e = await run('run.await', { workflow: 'ci.yml', event: 'push', branch: 'main', deadline: 1 }, context({ gh: g.gh })).catch((x) => x);
+    expect(classify(e)).toBe('infra');
+    expect(e.message).toMatch(/deadline.*no run of ci\.yml.*no push run was delivered for abc/);
+  });
+
+  it('asks for push runs only on a `push` event: another event\'s deadline stays `fail`', async () => {
+    const PR_RUNS = `GET repos/${REPO}/actions/workflows/ci.yml/runs?event=pull_request&head_sha=def&per_page=20`;
+    const g = stubGh({ [`GET repos/${REPO}/pulls/5`]: { head: { sha: 'def' } }, [PR_RUNS]: { workflow_runs: [] }, [`GET repos/${REPO}/actions/runs?event=push&head_sha=def&per_page=1`]: { total_count: 0 } });
+    const e = await run('run.await', { workflow: 'ci.yml', event: 'pull_request', pr: 'docs', deadline: 1 }, context({ gh: g.gh, state: { prs: { docs: 5 } } })).catch((x) => x);
+    expect(classify(e)).toBe('fail');
+    expect(g.calls.map((c) => c.key)).not.toContain(`GET repos/${REPO}/actions/runs?event=push&head_sha=def&per_page=1`);
   });
 });
 
