@@ -15,7 +15,10 @@
 // With a `job`, the one whose run uploads the row, a run with no row reads that job and the jobs
 // it calls (`<job> / …`): when every one was `skipped`, none ran to upload a row, so it fails at
 // once, saying so, rather than at its deadline; else its deadline's message names their
-// conclusions (harness #105).
+// conclusions (harness #105). A skip names the conclusions of the jobs beside it, the other jobs
+// of its caller (`review / filter` beside `review / review`), from the same jobs call: GitHub skips
+// a job whose `needs` didn't succeed as well as one whose `if` is false, so a filter's `failure`
+// must not read as a gate refusal (harness #122).
 //
 // The result carries `costUsd`, and `runner/ledger.mjs` reads it as the scenario's history.
 
@@ -33,6 +36,17 @@ import { named } from '../lib/state.mjs';
 /** A Kanon lane's name, as the row's `lane` and the artifact's name carry it. */
 const LANE = /^[a-z][a-z-]{0,39}$/;
 const FILE = 'kanon-telemetry.json';
+
+/**
+ * Whether job `name` sits beside `job`: another job of the same caller (`review / filter` beside
+ * `review / review`), not one `job` calls nor one of another caller.
+ * @param {string} name @param {string} job
+ */
+const isBeside = (name, job) => {
+  const cut = job.lastIndexOf(' / ');
+  const caller = cut < 0 ? '' : job.slice(0, cut + 3);
+  return name !== job && name.startsWith(caller) && !name.slice(caller.length).includes(' / ');
+};
 
 export default {
   verb: 'expect.row',
@@ -54,8 +68,13 @@ export default {
       if (rows.length) return met(rows[0]);
       const why = `no telemetry row \`kanon-telemetry-${step.lane}-${id}-<attempt>\` on run ${id}; the run has ${names.length ? names.map((n) => `\`${n}\``).join(', ') : 'none'}`;
       if (step.job === undefined) return unmet(why);
-      const jobs = (await api(ctx, repoPath(ctx, `actions/runs/${id}/jobs?per_page=100`))).jobs.filter((/** @type {any} */ j) => j.name === step.job || String(j.name).startsWith(`${step.job} / `));
-      if (jobs.length && jobs.every((/** @type {any} */ j) => j.conclusion === 'skipped')) throw new Fail(`${why}; job \`${step.job}\` was skipped, so it uploaded none`);
+      const all = (await api(ctx, repoPath(ctx, `actions/runs/${id}/jobs?per_page=100`))).jobs;
+      const jobs = all.filter((/** @type {any} */ j) => j.name === step.job || String(j.name).startsWith(`${step.job} / `));
+      if (jobs.length && jobs.every((/** @type {any} */ j) => j.conclusion === 'skipped')) {
+        const beside = all.filter((/** @type {any} */ j) => isBeside(String(j.name), step.job));
+        const named = beside.length ? `; beside it, ${beside.map((/** @type {any} */ j) => `\`${j.name}\` \`${j.conclusion}\``).join(', ')}: a job is skipped when one it \`needs\` didn't succeed, too` : '';
+        throw new Fail(`${why}; job \`${step.job}\` was skipped, so it uploaded none${named}`);
+      }
       return unmet(`${why}; job \`${step.job}\`: ${jobs.length ? jobs.map((/** @type {any} */ j) => `\`${j.name}\` \`${j.conclusion}\``).join(', ') : 'not in the run'}`);
     });
 

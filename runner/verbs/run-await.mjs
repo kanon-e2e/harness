@@ -8,8 +8,11 @@
 // runs on the same head, each skipped by its filter in seconds, and none of them is the one the
 // scenario's event started. Without `actor`, the newest run of all, as before.
 //
-// On a `push` event, when the deadline passes and GitHub records no workflow run of any kind for
-// the commit's push, the step reads `infra`, not `fail` (`runner/lib/push.mjs`, #115).
+// On a `push` event, when the deadline passes, it reads the commit's tree first (#126). A tree
+// whose `workflow` runs on no push to the branch (missing, no `push` trigger, or a branch filter
+// that leaves the branch out) keeps `fail`: a Kanon finding. Only when it should have run, and
+// GitHub records no workflow run of any kind for the commit's push, does the step read `infra`
+// (`runner/lib/push.mjs`, #115). On `pr`, the branch is the pull request's head.
 
 import { readFileSync } from 'node:fs';
 
@@ -17,7 +20,7 @@ import { BRANCH, NAME, WORKFLOW, str } from '../lib/args.mjs';
 import { api, botLogin, repoPath } from '../lib/gh.mjs';
 import { met, poll, unmet } from '../lib/poll.mjs';
 import { onPush } from '../lib/push.mjs';
-import { commitOf, remember } from '../lib/state.mjs';
+import { commitOf, named, remember } from '../lib/state.mjs';
 
 /** The test Apps' slugs, by identity (runner/test-apps.json). @type {Record<string, string>} */
 const SLUGS = JSON.parse(readFileSync(new URL('../test-apps.json', import.meta.url), 'utf8')).apps;
@@ -54,8 +57,10 @@ export default {
       if (!latest) return unmet(`no run of ${step.workflow} on ${step.event} for ${sha}${login ? ` started by ${login}` : ''} yet${login && all.length ? `; ${all.length} started by others: ${[...new Set(all.map(startedBy))].join(', ')}` : ''}`);
       return latest.status === 'completed' ? met(latest) : unmet(`run ${latest.id} of ${step.workflow} is ${latest.status}`);
     });
-    // On `push`, a deadline with no push run of any kind for the commit reads `infra` (#115).
-    const run = step.event === 'push' ? await onPush(ctx, sha, wait) : await wait();
+    // On `push`, a deadline reads `infra` only when the tree runs the workflow on that push and
+    // GitHub records no push run of any kind for the commit (#115, #126).
+    const branch = async () => step.branch ?? (await api(ctx, repoPath(ctx, `pulls/${named(ctx, 'prs', step.pr)}`))).head.ref;
+    const run = step.event === 'push' ? await onPush(ctx, sha, wait, { workflow: step.workflow, branch }) : await wait();
     remember(ctx, 'runs', runName(step), run.id);
   },
 };

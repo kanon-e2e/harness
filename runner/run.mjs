@@ -9,8 +9,10 @@
 // THE SCENARIO'S RESULT is `pass`, `fail` or `infra`, set once and never changed:
 //   fail    an expectation was false, a step's or the scenario's deadline passed, or the harness's
 //           own code went wrong;
-//   infra   GitHub failed and the retries outlasted it, a token expired, the repository wasn't
-//           provisioned or is gone, or the state didn't arrive;
+//   infra   GitHub failed and the retries outlasted it, a token expired, GitHub delivered no push
+//           run of any kind for a commit whose tree should have started one (`release.cut`, or
+//           `run.await` on `push`, past its deadline: lib/push.mjs, #115, #126), the repository
+//           wasn't provisioned or is gone, or the state didn't arrive;
 //   pass    the last phase's `act` segment ran every step. Only an `act` job reads `pass`: a
 //           state that arrives claiming it is refused, as `infra`.
 // The `act` job that learns the result records it on the repository as a topic, `kanon-e2e-passed`,
