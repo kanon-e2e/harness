@@ -1,9 +1,11 @@
-import { mkdirSync, symlinkSync } from 'node:fs';
+import { mkdirSync, readdirSync, readFileSync, symlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { SUBSTITUTION } from '../runner/lib/substitute.mjs';
+import { layStart } from '../runner/run.mjs';
 import { scenarioDirs, validateScenarioDir, validateScenarioJson, validateStart, validateSteps } from '../runner/validate.mjs';
 import { VOCABULARY } from '../runner/vocabulary.mjs';
-import { scenarioJson, tempDir, writeScenario, writeTree } from './helpers/stubs.mjs';
+import { RELEASE, scenarioJson, tempDir, writeScenario, writeTree } from './helpers/stubs.mjs';
 
 /**
  * The scenario format (Kanon plan 0012 §4, step E3): `scenario.json` field by field (§4.1), the
@@ -114,6 +116,41 @@ describe('start/: copied as it is, with two substitutions and no others (§4.1)'
 
   it('reads a binary file as data, not as text to substitute', () => {
     expect(start({ 'img.bin': `\u0000{{anything}}` })).toEqual([]);
+  });
+});
+
+describe('start/ and files.commit share one substitution, runner/lib/substitute.mjs (#95)', () => {
+  const RUNNER = join(import.meta.dirname, '..', 'runner');
+  const SHARED = join('lib', 'substitute.mjs');
+  const modules = (dir, rel = '') => readdirSync(join(dir, rel), { withFileTypes: true }).flatMap((e) => {
+    const r = join(rel, e.name);
+    if (e.isDirectory()) return modules(dir, r);
+    return e.name.endsWith('.mjs') ? [r] : [];
+  });
+
+  it('defines the two and their pattern only in lib/substitute.mjs', () => {
+    const others = modules(RUNNER).filter((r) => r !== SHARED);
+    expect(others.length).toBeGreaterThan(0);
+    for (const r of others) {
+      const text = readFileSync(join(RUNNER, r), 'utf8');
+      expect(text, r).not.toContain(SUBSTITUTION.source);
+      expect(text, r).not.toMatch(/\bSUBSTITUTIONS\s*=|\bSUBSTITUTION\s*=|\bconst (substitute|substituteBytes|strangers)\s*=/);
+    }
+  });
+
+  it.each([['validate.mjs'], ['run.mjs'], [join('verbs', 'files-commit.mjs')]])('%s imports it', (r) => {
+    expect(readFileSync(join(RUNNER, r), 'utf8')).toMatch(/from '\.\.?\/lib\/substitute\.mjs'/);
+  });
+
+  it('layStart fills in the two in paths and text, and leaves a workflow expression, another name and a binary file as they are', () => {
+    const src = writeTree(tempDir(), {
+      'docs/{{repository}}.md': 'Kanon {{release}} in {{repository}}, ${{ github.sha }}, {{version}}.\n',
+      'img.bin': '\u0000{{release}}',
+    });
+    const dest = tempDir();
+    layStart(src, dest, { release: RELEASE, repository: 'o/r' });
+    expect(readFileSync(join(dest, 'docs', 'o', 'r.md'), 'utf8')).toBe(`Kanon ${RELEASE} in o/r, \${{ github.sha }}, {{version}}.\n`);
+    expect(readFileSync(join(dest, 'img.bin'), 'utf8')).toBe('\u0000{{release}}');
   });
 });
 

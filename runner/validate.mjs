@@ -23,15 +23,12 @@ import { basename, join, relative } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 import { BRANCH, DEADLINE, bool, checkArgs, int, map, str, strs } from './lib/args.mjs';
+import { SUBSTITUTION, strangers } from './lib/substitute.mjs';
 import { VOCABULARY } from './vocabulary.mjs';
 
 /** At most three phases, each a `kanon` job and then an `act` job (§5.2). */
 export const MAX_PHASES = 3;
 export const SEGMENTS = /** @type {const} */ (['kanon', 'act']);
-/** The two substitutions `start/` takes (§4.1). */
-export const SUBSTITUTIONS = Object.freeze(['release', 'repository']);
-/** `{{name}}`, but not a workflow's `${{ expression }}`. */
-const SUBSTITUTION = /(?<!\$)\{\{([^{}]*)\}\}/g;
 
 /** scenario.json's fields (§4.1). */
 export const SCENARIO_FIELDS = Object.freeze({
@@ -73,9 +70,6 @@ export function validateScenarioJson(s, dirName) {
   }
   return p;
 }
-
-/** The substitutions in `text` that aren't the two. @param {string} text */
-const strangers = (text) => [...text.matchAll(SUBSTITUTION)].map((m) => m[0]).filter((m) => !SUBSTITUTIONS.includes(m.slice(2, -2)));
 
 /**
  * The problems of a `start/` tree: anything but a regular file or a directory, a substitution

@@ -202,7 +202,7 @@ gh workflow run upgrade-signal.yml -R kanon-e2e/harness
 `npm ci && npm test` runs them on Vitest; CI runs them on every pull request. [`docs/qa/stack.md`](docs/qa/stack.md) lists the gates.
 
 - `tests/escalation-paths.test.mjs` holds each pattern above on the `always` list.
-- `tests/scenario-format.test.mjs` validates every directory under `scenarios/`, and holds the validator to the format above: each rule it refuses, by name.
+- `tests/scenario-format.test.mjs` validates every directory under `scenarios/`, and holds the validator to the format above: each rule it refuses, by name. It also holds `start/` and `files.commit` to one substitution, [`runner/lib/substitute.mjs`](runner/lib/substitute.mjs): the validator, the runner's `layStart` and `files.commit` import it, and no other runner module defines its own.
 - `tests/vocabulary.test.mjs` holds the vocabulary to plan 0012 §4.2: the closed set, each verb's segment kind, the deadline and backoff of every verb that waits, Kanon's code run only through `npx` at the release, the known markers, and the two tables of verbs.
 - `tests/verbs-kanon.test.mjs`, `tests/verbs-act.test.mjs` and `tests/verbs-read.test.mjs` test each verb on a stubbed `gh`, `npx` and `git`.
 - `tests/deploy-rehearsal.test.mjs` holds `scenarios/deploy-rehearsal/` to its issue's acceptance criteria (#26). Those are its three releases and what each expects, the environments and the tag ruleset before the first, production's wait, the run's job names, and every `deploy.*` finding held absent.

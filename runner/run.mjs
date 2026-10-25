@@ -32,8 +32,9 @@ import { Fail } from './lib/fail.mjs';
 import { api, notFound } from './lib/gh.mjs';
 import { exec as realExec, ghProcess } from './lib/proc.mjs';
 import { classify, infra, retrying, retryingExec } from './lib/retry.mjs';
+import { substitute, substituteBytes } from './lib/substitute.mjs';
 import { SETTINGS } from './sizing.mjs';
-import { SUBSTITUTIONS, loadScenario } from './validate.mjs';
+import { loadScenario } from './validate.mjs';
 import { IDENTITY } from './verbs/files-commit.mjs';
 import { VOCABULARY } from './vocabulary.mjs';
 
@@ -60,7 +61,6 @@ export const recordedResult = (topics) => {
 export const MODEL_SECRET = 'CLAUDE_CODE_OAUTH_TOKEN';
 export const LAY_MESSAGE = 'Lay the scenario\'s starting tree';
 const RESULTS = ['pass', 'fail', 'infra'];
-const SUBSTITUTION = /(?<!\$)\{\{([^{}]*)\}\}/g;
 
 /** A fresh state, as the first `kanon` job starts it. */
 const freshState = (/** @type {any} */ a, /** @type {number} */ now) => ({
@@ -105,9 +105,6 @@ export const readState = (path, want = {}) => {
   return problem ? { problem } : { state: s };
 };
 
-/** `text` with `{{release}}` and `{{repository}}` filled in. @param {string} text @param {Record<string, string>} values */
-const substitute = (text, values) => text.replace(SUBSTITUTION, (m, name) => (SUBSTITUTIONS.includes(name) ? values[name] : m));
-
 /**
  * Writes the scenario's `start/` into `dest`, substitutions filled in, a binary file as it is.
  * @param {string} startDir @param {string} dest @param {Record<string, string>} values
@@ -122,7 +119,7 @@ export const layStart = (startDir, dest, values) => {
       const to = join(dest, substitute(relative(startDir, full), values));
       const bytes = readFileSync(full);
       mkdirSync(dirname(to), { recursive: true });
-      writeFileSync(to, bytes.includes(0) ? bytes : substitute(bytes.toString('utf8'), values));
+      writeFileSync(to, substituteBytes(bytes, values));
     }
   };
   walk(startDir);
