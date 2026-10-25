@@ -108,6 +108,7 @@ export const checkArgs = (specs, obj, prefix = '', unknown = (k) => `\`${k}\` is
       if (s.required) p.push(`\`${prefix}${k}\` is missing`);
     } else p.push(...checkValue(`${prefix}${k}`, s, obj[k]));
   }
-  for (const k of Object.keys(obj)) if (!(k in specs)) p.push(unknown(`${prefix}${k}`));
+  // Own keys only: `in` would let a name every object inherits (`constructor`, `__proto__`) pass.
+  for (const k of Object.keys(obj)) if (!Object.hasOwn(specs, k)) p.push(unknown(`${prefix}${k}`));
   return p;
 };

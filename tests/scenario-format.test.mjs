@@ -68,6 +68,13 @@ describe('scenario.json, field by field (§4.1)', () => {
     if (id === 'sample') expect(errors.length).toBe(1);
   });
 
+  it('refuses a field named after one every object inherits (constructor, toString, __proto__)', () => {
+    for (const k of ['constructor', 'toString', '__proto__']) {
+      const s = JSON.parse(JSON.stringify(scenarioJson('sample')).replace(/^\{/, `{"${k}":"not a field",`));
+      expect(validateScenarioJson(s, 'sample'), k).toEqual([`\`${k}\` is not a field of scenario.json (Kanon plan 0012 §4.1)`]);
+    }
+  });
+
   it('refuses a missing field by name', () => {
     const { tier: _, ...rest } = scenarioJson('sample');
     expect(validateScenarioJson(rest, 'sample').join('\n')).toMatch(/tier/);
@@ -150,6 +157,12 @@ describe('the closed vocabulary, each verb in its kind of segment (§4.2)', () =
     expect(stepErrors({ verb: 'kanon.upgrade' }, 'kanon').join('\n')).toMatch(/unknown verb `kanon\.upgrade`/);
   });
 
+  it('refuses a verb named after a property every object inherits as unknown, rather than throwing', () => {
+    for (const verb of ['constructor', '__proto__', 'toString', 'hasOwnProperty']) {
+      expect(stepErrors({ verb }).join('\n'), verb).toMatch(new RegExp(`unknown verb \`${verb}\``));
+    }
+  });
+
   it('refuses an act verb in a kanon segment', () => {
     const errors = stepErrors({ verb: 'pr.open', name: 'docs', head: 'docs', title: 'Docs' }, 'kanon');
     expect(errors.join('\n')).toMatch(/`pr\.open` writes to GitHub with the harness's code, so it belongs only in an `act` segment/);
@@ -190,6 +203,13 @@ describe('the closed vocabulary, each verb in its kind of segment (§4.2)', () =
   it('refuses an argument the verb doesn\'t take, and a missing one it needs', () => {
     expect(stepErrors({ verb: 'issue.open', name: 'a', title: 'A', assignee: 'x' }).join('\n')).toMatch(/`assignee`/);
     expect(stepErrors({ verb: 'issue.open', name: 'a' }).join('\n')).toMatch(/`title`/);
+  });
+
+  it('refuses an argument named after a property every object inherits (constructor, toString, __proto__)', () => {
+    for (const k of ['constructor', 'toString', 'valueOf', '__proto__']) {
+      const step = JSON.parse(`{"verb":"issue.open","name":"a","title":"A","${k}":"free text"}`);
+      expect(stepErrors(step), k).toEqual([`phases[0].act[0] \`issue.open\`: \`${k}\` is not an argument it takes`]);
+    }
   });
 
   it('refuses a reference to a pull request, issue, run or document no earlier step made', () => {
@@ -313,6 +333,15 @@ describe('expectations read a field, a finding id or a known marker, never prose
     ]) {
       const errors = stepErrors({ verb, ...extra }, 'act', OPENED);
       expect(errors.join('\n'), `${verb} ${JSON.stringify(extra)}`).toMatch(/names only a JSON field, a finding id or a known marker/);
+    }
+  });
+
+  it('refuses free text under a name every object inherits (valueOf, constructor, __proto__), and a substitution there, rather than throwing', () => {
+    for (const k of ['valueOf', 'constructor', '__proto__']) {
+      const step = JSON.parse(`{"verb":"expect.issue","issue":"bug","deadline":5,"${k}":"free text to match"}`);
+      expect(stepErrors(step, 'act', OPENED).join('\n'), k).toMatch(new RegExp(`\`${k}\` is not something an expectation may name`));
+      const api = JSON.parse(`{"verb":"expect.api","path":"repos/{{repository}}/issues/1","pointer":"/state","equals":"open","deadline":5,"${k}":"{{release}}"}`);
+      expect(stepErrors(api).join('\n'), k).toMatch(/the substitution \{\{release\}\} is not taken here/);
     }
   });
 

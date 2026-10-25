@@ -158,7 +158,7 @@ export function validateSteps(steps, scope = {}) {
         if (!isObject(step) || typeof step.verb !== 'string') return p.push(`${where}: a step is an object that names its \`verb\``);
         const errors = stepProblems(step, segment, made, scope);
         if (step.verb === 'repo.apply' && ++applies > 2) errors.push('`repo.apply` runs at most twice for each kept init document: the first applies the settings init leaves, the second the `Lane check` rule');
-        if ((VOCABULARY[step.verb]?.defines?.(step) ?? []).some(([kind, name]) => kind === 'documents' && name === 'init')) applies = 0;
+        if ((verbOf(step)?.defines?.(step) ?? []).some(([kind, name]) => kind === 'documents' && name === 'init')) applies = 0;
         if (step.verb === 'bootstrap.end' && typeof step.move === 'string') {
           if (ends.has(step.move)) errors.push(`\`${step.move}\` runs once`);
           if (step.move === 'approval' && !ends.has('record')) errors.push('`approval` has no earlier `record`: once the ruleset requires an approval, the record can\'t reach the default branch without one');
@@ -172,13 +172,16 @@ export function validateSteps(steps, scope = {}) {
   return p;
 }
 
+/** The step's verb from the vocabulary, or undefined: an own key, so `constructor` is no verb. @param {Record<string, any>} step */
+const verbOf = (step) => (Object.hasOwn(VOCABULARY, step.verb) ? VOCABULARY[step.verb] : undefined);
+
 /**
  * The problems of one step in a segment, given what earlier steps made (which it adds to).
  * @param {Record<string, any>} step @param {'kanon' | 'act'} segment
  * @param {Record<string, Set<string>>} made @param {{ scenarioDir?: string }} scope
  */
 function stepProblems(step, segment, made, scope) {
-  const v = VOCABULARY[step.verb];
+  const v = verbOf(step);
   if (!v) return [`unknown verb \`${step.verb}\`: the vocabulary is closed (Kanon plan 0012 §4.2); a verb is added in a pull request, with its test`];
   const p = [];
   if (v.kind !== 'read' && v.kind !== segment) p.push(KIND_RULE[/** @type {'kanon' | 'act'} */ (v.kind)](step.verb));
@@ -194,7 +197,7 @@ function stepProblems(step, segment, made, scope) {
 
   for (const [key, text] of Object.entries(args).flatMap(([k, x]) => strings(x, k))) {
     for (const [s, name] of text.matchAll(SUBSTITUTION)) {
-      if (!(v.substitutes?.[key] ?? []).includes(name)) p.push(`\`${key}\`: the substitution ${s} is not taken here: steps.json takes \`{{repository}}\` in \`expect.api\`'s path, \`{{release}}\` in a \`fields\` entry's \`equals\` of \`expect.init\` and \`expect.doctor\`, and nothing else`);
+      if (!(Object.hasOwn(v.substitutes ?? {}, key) ? v.substitutes[key] : []).includes(name)) p.push(`\`${key}\`: the substitution ${s} is not taken here: steps.json takes \`{{repository}}\` in \`expect.api\`'s path, \`{{release}}\` in a \`fields\` entry's \`equals\` of \`expect.init\` and \`expect.doctor\`, and nothing else`);
     }
   }
 
