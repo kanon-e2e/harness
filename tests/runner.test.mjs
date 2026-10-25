@@ -3,7 +3,8 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { exec as realExec } from '../runner/lib/proc.mjs';
-import { classify, isRetryable, retrying, retryingExec } from '../runner/lib/retry.mjs';
+import { api } from '../runner/lib/gh.mjs';
+import { classify, isRetryable, isWrite, retrying, retryingExec } from '../runner/lib/retry.mjs';
 import { readState, runSegment } from '../runner/run.mjs';
 import { RELEASE, fail, fakeClock, inTurn, scenarioJson, stubGh, tempDir, writeScenario } from './helpers/stubs.mjs';
 
@@ -170,6 +171,135 @@ describe('a 502 is retried; a false expectation is not (§10)', () => {
     expect((await gh(['api', 'x'])).status).toBe(1);
     expect(n).toBe(4);
     expect(clock.sleeps).toEqual([2000, 4000, 8000]);
+  });
+});
+
+describe('a write is looked up before it is asked again (#130, the Owner 2026-10-25)', () => {
+  const BAD = { status: 1, stdout: '', stderr: 'gh: HTTP 502: Bad Gateway' };
+  const OK = (v) => ({ status: 0, stdout: JSON.stringify(v), stderr: '' });
+  /** A `gh` that answers each call in turn from `answers`, the last repeated, recording what it was asked. */
+  const scripted = (...answers) => {
+    const seen = [];
+    const gh = async (args) => { seen.push(args.join(' ')); return answers[Math.min(seen.length - 1, answers.length - 1)]; };
+    return { gh, seen };
+  };
+  const POST = ['api', '-X', 'POST', 'repos/o/r/pulls', '--input', '-'];
+
+  it('isWrite(): a POST, a DELETE, a GraphQL mutation and `pr merge` write; a GET, a PUT, a PATCH, a GraphQL query and `run download` do not', () => {
+    expect(isWrite(POST, '{}')).toBe(true);
+    expect(isWrite(['api', '-X', 'DELETE', 'repos/o/r'])).toBe(true);
+    expect(isWrite(['api', '-X', 'POST', 'graphql', '--input', '-'], JSON.stringify({ query: 'mutation($id:ID!){enqueuePullRequest(input:{pullRequestId:$id}){clientMutationId}}' }))).toBe(true);
+    expect(isWrite(['pr', 'merge', '5', '-R', 'o/r', '--squash', '--auto'])).toBe(true);
+    expect(isWrite(['api', 'repos/o/r'])).toBe(false);
+    expect(isWrite(['api', '--paginate', '--slurp', 'repos/o/r/labels?per_page=100'])).toBe(false);
+    expect(isWrite(['api', '-X', 'PUT', 'repos/o/r/topics', '--input', '-'], '{}')).toBe(false);
+    expect(isWrite(['api', '-X', 'PATCH', 'repos/o/r', '--input', '-'], '{}')).toBe(false);
+    expect(isWrite(['api', '-X', 'POST', 'graphql', '--input', '-'], JSON.stringify({ query: 'query($n:Int!){repository(owner:"o",name:"r"){pullRequest(number:$n){id}}}' }))).toBe(false);
+    expect(isWrite(['run', 'download', '7', '-R', 'o/r', '-n', 'x', '-D', '/tmp/x'])).toBe(false);
+  });
+
+  it('a write with no lookup is asked once: its 502 comes back as it is, and reads `infra`', async () => {
+    const clock = fakeClock();
+    const { gh, seen } = scripted(BAD, OK({ number: 5 }));
+    const r = await retrying(gh, clock)(POST, '{}');
+    expect(r).toEqual(BAD);
+    expect(seen).toHaveLength(1);
+    expect(clock.sleeps).toEqual([]);
+    expect(classify(Object.assign(new Error('x'), { stderr: r.stderr }))).toBe('infra');
+  });
+
+  it('a write whose first attempt landed: looked up after the backoff, never asked again, and the lookup\'s answer is the call\'s', async () => {
+    const clock = fakeClock();
+    const { gh, seen } = scripted(BAD, OK({ number: 6 }));
+    let looked = 0;
+    const r = await retrying(gh, clock)(POST, '{}', { landed: async () => { looked++; return { answer: { number: 5 } }; } });
+    expect(r.status).toBe(0);
+    expect(JSON.parse(r.stdout)).toEqual({ number: 5 });
+    expect(seen).toHaveLength(1);
+    expect(clock.sleeps).toEqual([2000]);
+    expect(looked).toBe(1);
+  });
+
+  it('a write that didn\'t land is asked again after each lookup that finds nothing, up to three times, then gives the failure back', async () => {
+    const clock = fakeClock();
+    const { gh, seen } = scripted(BAD);
+    let looked = 0;
+    const r = await retrying(gh, clock)(POST, '{}', { landed: async () => { looked++; return null; } });
+    expect(r).toEqual(BAD);
+    expect(seen).toHaveLength(4);
+    expect(looked).toBe(3);
+    expect(clock.sleeps).toEqual([2000, 4000, 8000]);
+    const twice = scripted(BAD, OK({ number: 7 }));
+    const r2 = await retrying(twice.gh, fakeClock())(POST, '{}', { landed: async () => null });
+    expect(JSON.parse(r2.stdout)).toEqual({ number: 7 });
+    expect(twice.seen).toHaveLength(2);
+  });
+
+  it('a lookup that finds an empty answer, such as a DELETE\'s, counts as landed', async () => {
+    const { gh, seen } = scripted(BAD);
+    const r = await retrying(gh, fakeClock())(['api', '-X', 'DELETE', 'repos/o/r'], undefined, { landed: async () => ({ answer: null }) });
+    expect(r).toEqual({ status: 0, stdout: '', stderr: '' });
+    expect(seen).toHaveLength(1);
+  });
+
+  it('a write GitHub refused (a 422) is neither looked up nor asked again', async () => {
+    const refused = { status: 1, stdout: '', stderr: 'gh: Validation Failed (HTTP 422)' };
+    const { gh, seen } = scripted(refused);
+    let looked = 0;
+    expect(await retrying(gh, fakeClock())(POST, '{}', { landed: async () => { looked++; return null; } })).toEqual(refused);
+    expect(seen).toHaveLength(1);
+    expect(looked).toBe(0);
+  });
+
+  it('reads keep today\'s retries, and so do a PUT and a PATCH, which set a state that asking again leaves the same', async () => {
+    for (const args of [['api', 'repos/o/r'], ['api', '-X', 'PUT', 'repos/o/r/topics', '--input', '-'], ['api', '-X', 'PATCH', 'repos/o/r', '--input', '-'], ['run', 'download', '7']]) {
+      const { gh, seen } = scripted(BAD);
+      await retrying(gh, fakeClock())(args, '{}');
+      expect(seen, args.join(' ')).toHaveLength(4);
+    }
+  });
+
+  it('api(): a write GitHub answered whole but cut off is looked up; with no lookup, or none found, it reads `infra`', async () => {
+    const cut = { gh: async () => ({ status: 0, stdout: '{"number": 5, "ti', stderr: '' }), repository: 'o/r' };
+    expect(await api(cut, 'repos/o/r/pulls', { method: 'POST', body: {}, landed: async () => ({ answer: { number: 5 } }) })).toEqual({ number: 5 });
+    for (const landed of [undefined, async () => null]) {
+      const e = await api(cut, 'repos/o/r/pulls', { method: 'POST', body: {}, landed }).catch((x) => x);
+      expect(classify(e)).toBe('infra');
+      expect(e.message).toMatch(/POST repos\/o\/r\/pulls.*cut off/);
+    }
+    // A read's cut-off answer is unchanged: the harness's own error.
+    const read = await api(cut, 'repos/o/r/pulls/5').catch((x) => x);
+    expect(classify(read)).toBe('fail');
+  });
+
+  it('api() hands a write\'s lookup to `gh`, which the runner retries with it', async () => {
+    const seen = [];
+    const landed = async () => null;
+    await api({ gh: async (args, input, opts) => { seen.push(opts); return OK({}); }, repository: 'o/r' }, 'repos/o/r/labels', { method: 'POST', body: { name: 'x' }, landed });
+    expect(seen).toEqual([{ landed }]);
+  });
+
+  it('in a segment: `pr.open`\'s POST that GitHub committed before its 502 keeps the pull request it made, and the scenario passes', async () => {
+    const steps = { phases: [{ kanon: [], act: [{ verb: 'pr.open', name: 'docs', head: 'docs', title: 'docs: a line' }] }] };
+    const PULLS = `POST repos/${REPOSITORY}/pulls`;
+    const { result, state, g } = await segment({ steps, state: kanonState(), routes: {
+      [PULLS]: inTurn(fail('HTTP 502: Bad Gateway'), fail('HTTP 422: A pull request already exists for kanon-e2e:docs.')),
+      [`GET repos/${REPOSITORY}/pulls?state=open&head=${encodeURIComponent(`${OWNER}:docs`)}&base=main&per_page=100`]: [{ number: 12, head: { ref: 'docs' } }],
+    } });
+    expect(result.result).toBe('pass');
+    expect(state.prs).toEqual({ docs: 12 });
+    expect(g.calls.filter((c) => c.key === PULLS)).toHaveLength(1);
+  });
+
+  it('in a segment: the repository\'s DELETE that landed before its 502 reads `deleted`, asked once', async () => {
+    let deleted = false;
+    const { result, g } = await segment({ state: kanonState(), routes: {
+      [VARS]: { total_count: 1 },
+      [`DELETE repos/${REPOSITORY}`]: () => { deleted = true; return fail('HTTP 502: Bad Gateway'); },
+      [`GET repos/${REPOSITORY}`]: () => (deleted ? fail('HTTP 404: Not Found') : { full_name: REPOSITORY, default_branch: 'main', topics: PROVISIONED, archived: false }),
+    } });
+    expect(result).toMatchObject({ result: 'pass', repositoryAction: 'deleted' });
+    expect(g.calls.filter((c) => c.key === `DELETE repos/${REPOSITORY}`)).toHaveLength(1);
   });
 });
 

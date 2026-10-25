@@ -7,7 +7,7 @@
 // The verb that merges then polls `mergedProbe` until GitHub says it merged.
 
 import { Fail } from './fail.mjs';
-import { GhError, api, repoPath } from './gh.mjs';
+import { GhError, api, foundAs, repoPath } from './gh.mjs';
 import { met, unmet } from './poll.mjs';
 
 // `isMergeQueueEnabled` is the field `gh pr merge` reads for the same question: it answers for a
@@ -44,15 +44,24 @@ export async function startMerge(ctx, number, via) {
   if (via !== 'bypass') {
     const q = await queueState(ctx, number);
     if (q.isMergeQueueEnabled) {
-      if (!q.isInMergeQueue) await api(ctx, 'graphql', { method: 'POST', body: { query: ENQUEUE, variables: { id: q.id, head: q.headRefOid } } });
+      // An enqueue GitHub failed is asked again only when the pull request isn't in the queue (#130).
+      const landed = async () => foundAs((await queueState(ctx, number)).isInMergeQueue && { data: { enqueuePullRequest: null } });
+      if (!q.isInMergeQueue) await api(ctx, 'graphql', { method: 'POST', body: { query: ENQUEUE, variables: { id: q.id, head: q.headRefOid } }, landed });
       return { queue: { removedAt: q.removed?.createdAt ?? null } };
     }
   }
   const base = ['pr', 'merge', String(number), '-R', ctx.repository, '--squash'];
-  let r = await ctx.gh([...base, via === 'bypass' ? '--admin' : '--auto']);
+  // A `pr merge` GitHub failed is asked again only when the pull request hasn't merged, nor, for
+  // `--auto`, had auto-merge turned on (#130).
+  const landedIf = (/** @type {boolean} */ auto) => ({ landed: async () => {
+    const pr = await api(ctx, repoPath(ctx, `pulls/${number}`));
+    return foundAs((pr.merged || (auto && pr.auto_merge)) && pr);
+  } });
+  const auto = via !== 'bypass';
+  let r = await ctx.gh([...base, auto ? '--auto' : '--admin'], undefined, landedIf(auto));
   // Auto-merge can't be turned on for a pull request that can merge now, nor in a repository that
   // doesn't allow it: merge it now.
-  if (via !== 'bypass' && r.status !== 0 && /clean status|auto merge is not allowed/i.test(r.stderr)) r = await ctx.gh(base);
+  if (auto && r.status !== 0 && /clean status|auto merge is not allowed/i.test(r.stderr)) r = await ctx.gh(base, undefined, landedIf(false));
   if (r.status !== 0) throw new GhError(`pr merge ${number}`, r);
   return { queue: null };
 }

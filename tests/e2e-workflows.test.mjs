@@ -66,6 +66,21 @@ describe('e2e.yml: the jobs of §5.2, in order', () => {
     expect(e2e.jobs.provision.needs).toEqual(['plan', 'start']);
   });
 
+  // An artifact belongs to the run, not the attempt, so "Re-run all jobs" uploads under a name the
+  // first attempt already used: without `overwrite`, `plan`'s marker upload fails, `start` is
+  // skipped, and the re-run isn't the one the README promises (#25). `plan`'s count of a
+  // candidate's runs reads distinct `workflow_run.id`s, so a re-run's marker still counts once.
+  it('every artifact the run and its jobs upload sets `overwrite: true`, so "Re-run all jobs" can upload it again (#25)', () => {
+    const uploads = Object.entries(docs)
+      .filter(([file]) => file === 'e2e.yml' || /^e2e-.*-job\.yml$/.test(file))
+      .flatMap(([file, doc]) => Object.entries(doc.jobs ?? {}).flatMap(([job, j]) => (j.steps ?? [])
+        .filter((s) => String(s.uses ?? '').startsWith('actions/upload-artifact@'))
+        .map((s) => ({ at: `${file} ${job}: ${s.name}`, overwrite: s.with?.overwrite }))));
+    expect(uploads.map((u) => u.at)).toEqual(expect.arrayContaining(["e2e.yml plan: Record the run's marker", 'e2e.yml verdict: Upload verdict.json']));
+    expect(uploads.length).toBeGreaterThanOrEqual(6);
+    for (const u of uploads) expect(u.overwrite, u.at).toBe(true);
+  });
+
   it('`start` posts the check run only for a candidate\'s run that goes ahead', () => {
     expect(e2e.jobs.start.if).toBe("${{ needs.plan.outputs.go == 'true' && needs.plan.outputs.trigger == 'candidate' }}");
   });

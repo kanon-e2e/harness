@@ -6,7 +6,7 @@
 
 import { readFileSync } from 'node:fs';
 import { str, strs } from '../lib/args.mjs';
-import { api, repoPath } from '../lib/gh.mjs';
+import { api, foundAs, repoPath } from '../lib/gh.mjs';
 
 const APPS = JSON.parse(readFileSync(new URL('../test-apps.json', import.meta.url), 'utf8')).apps;
 
@@ -23,8 +23,8 @@ export default {
   },
   /** @param {any} step @param {any} ctx */
   async run(step, ctx) {
-    const have = await api(ctx, repoPath(ctx, 'rulesets?per_page=100'), { paginate: true });
-    if (have.some((/** @type {any} */ r) => r.name === TAG_RULESET)) return;
+    const find = async () => (await api(ctx, repoPath(ctx, 'rulesets?per_page=100'), { paginate: true })).find((/** @type {any} */ r) => r.name === TAG_RULESET);
+    if (await find()) return;
     const bypass = [];
     for (const app of step.bypass ?? []) bypass.push({ actor_id: (await api(ctx, `apps/${APPS[app]}`)).id, actor_type: 'Integration', bypass_mode: 'always' });
     await api(ctx, repoPath(ctx, 'rulesets'), {
@@ -37,6 +37,8 @@ export default {
         rules: [{ type: 'creation' }, { type: 'update' }, { type: 'deletion' }],
         bypass_actors: bypass,
       },
+      // A POST GitHub failed is asked again only when no ruleset of the name is there (#130).
+      landed: async () => foundAs(await find()),
     });
   },
 };

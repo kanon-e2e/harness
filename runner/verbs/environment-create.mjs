@@ -7,7 +7,7 @@
 
 import { readFileSync } from 'node:fs';
 import { bool, str } from '../lib/args.mjs';
-import { api, repoPath } from '../lib/gh.mjs';
+import { api, foundAs, repoPath } from '../lib/gh.mjs';
 
 const REVIEWER = JSON.parse(readFileSync(new URL('../settings.json', import.meta.url), 'utf8')).environmentReviewer;
 
@@ -30,9 +30,8 @@ export default {
       body: { wait_timer: 0, ...review, deployment_branch_policy: { protected_branches: false, custom_branch_policies: true }, can_admins_bypass: false },
     });
     const policies = repoPath(ctx, `environments/${step.name}/deployment-branch-policies`);
-    const have = (await api(ctx, `${policies}?per_page=100`)).branch_policies ?? [];
-    if (!have.some((/** @type {any} */ p) => p.type === 'tag' && p.name === step.tags)) {
-      await api(ctx, policies, { method: 'POST', body: { name: step.tags, type: 'tag' } });
-    }
+    const find = async () => ((await api(ctx, `${policies}?per_page=100`)).branch_policies ?? []).find((/** @type {any} */ p) => p.type === 'tag' && p.name === step.tags);
+    // A POST GitHub failed is asked again only when the tag rule isn't there (#130).
+    if (!(await find())) await api(ctx, policies, { method: 'POST', body: { name: step.tags, type: 'tag' }, landed: async () => foundAs(await find()) });
   },
 };

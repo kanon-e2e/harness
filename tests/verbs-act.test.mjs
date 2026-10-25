@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, symlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { classify } from '../runner/lib/retry.mjs';
+import { classify, retrying } from '../runner/lib/retry.mjs';
 import { VOCABULARY } from '../runner/vocabulary.mjs';
 import { REPO, RELEASE, context, fail, inTurn, stubExec, stubGh, tempDir, writeTree } from './helpers/stubs.mjs';
 
@@ -374,6 +374,42 @@ describe('pr.merge', () => {
     expect(ctx.clock.sleeps).toEqual([2000]);
   });
 
+  // The queue read decides the path (#76): a read that fails, or answers without the queue's
+  // state, fails the step, and never falls back to `--squash`, which a queued repository refuses
+  // with GitHub's reason, hiding the cause (#73). `pr merge` is routed to succeed, so a fallback
+  // would pass.
+  describe('a merge-queue read that fails or answers malformed fails the step, and squashes nothing (#76)', () => {
+    const merging = (read) => stubGh({
+      'POST graphql': read,
+      [`pr merge 5 -R ${REPO} --squash --auto`]: undefined,
+      [`pr merge 5 -R ${REPO} --squash`]: undefined,
+      ...pulls({ state: 'closed', merged: true }),
+    });
+    const merges = (g) => g.calls.filter((c) => c.key.startsWith('pr merge'));
+
+    it('a read `gh` exits non-zero on fails the step with that error', async () => {
+      const g = merging(fail('GraphQL: Something went wrong while executing your query. (HTTP 502)'));
+      await expect(run('pr.merge', { pr: 'docs', via: 'front-door', deadline: 5 }, context({ gh: g.gh, state: { prs: { docs: 5 } } }))).rejects.toThrow(/gh api POST graphql exited 1: GraphQL: Something went wrong/);
+      expect(merges(g)).toEqual([]);
+    });
+
+    it('a read with no pull request in it fails the step naming the missing merge-queue state', async () => {
+      const g = merging({ data: { repository: { pullRequest: null } } });
+      await expect(run('pr.merge', { pr: 'docs', via: 'front-door', deadline: 5 }, context({ gh: g.gh, state: { prs: { docs: 5 } } }))).rejects.toThrow(/no merge-queue state for pull request #5/);
+      expect(merges(g)).toEqual([]);
+    });
+
+    it('a read missing one queue field, or giving it the wrong type, fails the step too', async () => {
+      const { isMergeQueueEnabled, ...noEnabled } = queueState().data.repository.pullRequest;
+      expect(isMergeQueueEnabled).toBe(false);
+      for (const pr of [noEnabled, { ...noEnabled, isMergeQueueEnabled: 'false' }, { ...queueState().data.repository.pullRequest, isInMergeQueue: null }, { ...queueState().data.repository.pullRequest, timelineItems: {} }]) {
+        const g = merging({ data: { repository: { pullRequest: pr } } });
+        await expect(run('pr.merge', { pr: 'docs', via: 'front-door', deadline: 5 }, context({ gh: g.gh, state: { prs: { docs: 5 } } })), JSON.stringify(pr)).rejects.toThrow(/no merge-queue state for pull request #5/);
+        expect(merges(g)).toEqual([]);
+      }
+    });
+  });
+
   it('keeps polling when the queue\'s removal is its merge, which GitHub records as `merged`', async () => {
     const g = stubGh({
       ...graphql(queueState({ enabled: true }), queueState({ enabled: true, removals: [['2026-10-19T10:00:00Z', 'merged']] })),
@@ -690,5 +726,163 @@ describe('bootstrap.end', () => {
   it('runs each move once', async () => {
     await expect(run('bootstrap.end', { move: 'record' }, context({ state: { bootstrapEnded: TODAY } }))).rejects.toThrow(/once/);
     await expect(run('bootstrap.end', { move: 'approval' }, context({ state: { bootstrapEnded: TODAY, bootstrapApproval: true } }))).rejects.toThrow(/once/);
+  });
+});
+
+describe('a write the runner asks again after GitHub\'s failure is looked up first (#130, the Owner 2026-10-25)', () => {
+  /** `routes`, each write in `keys` answering a 502 the first time, then its route; `gh` retried as the runner retries it. */
+  const flaky = (routes, ...keys) => {
+    const asked = new Map();
+    const wrapped = Object.fromEntries(keys.map((key) => [key, (c) => {
+      asked.set(key, (asked.get(key) ?? 0) + 1);
+      const then = routes[key];
+      return asked.get(key) === 1 ? fail('gh: HTTP 502: Bad Gateway') : typeof then === 'function' ? then(c) : then;
+    }]));
+    const g = stubGh({ ...routes, ...wrapped });
+    const count = (key) => g.calls.filter((c) => c.key === key).length;
+    return { ...g, count, ctx: (over = {}) => context({ gh: retrying(g.gh, { sleep: async () => {} }), ...over }) };
+  };
+  const BAD = 'gh: HTTP 502: Bad Gateway';
+
+  describe('pr.open: the open pull request for that head', () => {
+    const POST = `POST repos/${REPO}/pulls`;
+    const LOOKUP = `GET repos/${REPO}/pulls?state=open&head=${encodeURIComponent('kanon-e2e:docs')}&base=main&per_page=100`;
+    it('landed: keeps the pull request the first POST made, and asks no second', async () => {
+      const g = flaky({ [POST]: fail('HTTP 422: A pull request already exists for kanon-e2e:docs.'), [LOOKUP]: [{ number: 12 }] }, POST);
+      const ctx = g.ctx();
+      await run('pr.open', { name: 'docs', head: 'docs', title: 't' }, ctx);
+      expect(ctx.state.prs).toEqual({ docs: 12 });
+      expect(g.count(POST)).toBe(1);
+    });
+    it('not landed: asks again, and keeps what that answers', async () => {
+      const g = flaky({ [POST]: { number: 5 }, [LOOKUP]: [] }, POST);
+      const ctx = g.ctx();
+      await run('pr.open', { name: 'docs', head: 'docs', title: 't' }, ctx);
+      expect(ctx.state.prs).toEqual({ docs: 5 });
+      expect(g.count(POST)).toBe(2);
+      expect(g.count(LOOKUP)).toBe(1);
+    });
+  });
+
+  describe('issue.open: the issue with that title and body, which no earlier step keeps', () => {
+    const POST = `POST repos/${REPO}/issues`;
+    const LOOKUP = `GET repos/${REPO}/issues?state=open&sort=created&direction=desc&per_page=100`;
+    it('landed: keeps the issue the first POST made, never a pull request, another body or an issue an earlier step keeps', async () => {
+      const open = [
+        { number: 11, title: 'A bug', body: 'Steps.', pull_request: {} },
+        { number: 10, title: 'A bug', body: 'Other steps.' },
+        { number: 9, title: 'A bug', body: 'Steps.' },
+        { number: 3, title: 'A bug', body: 'Steps.' },
+      ];
+      const g = flaky({ [POST]: { number: 99 }, [LOOKUP]: open }, POST);
+      const ctx = g.ctx({ state: { issues: { first: 3 } } });
+      await run('issue.open', { name: 'bug', title: 'A bug', body: 'Steps.' }, ctx);
+      expect(ctx.state.issues).toEqual({ first: 3, bug: 9 });
+      expect(g.count(POST)).toBe(1);
+    });
+    it('an empty body matches the null GitHub answers for it', async () => {
+      const g = flaky({ [POST]: { number: 99 }, [LOOKUP]: [{ number: 9, title: 'A bug', body: null }] }, POST);
+      const ctx = g.ctx();
+      await run('issue.open', { name: 'bug', title: 'A bug' }, ctx);
+      expect(ctx.state.issues).toEqual({ bug: 9 });
+    });
+    it('not landed: asks again', async () => {
+      const g = flaky({ [POST]: { number: 99 }, [LOOKUP]: [{ number: 3, title: 'A bug', body: 'Steps.' }] }, POST);
+      const ctx = g.ctx({ state: { issues: { first: 3 } } });
+      await run('issue.open', { name: 'bug', title: 'A bug', body: 'Steps.' }, ctx);
+      expect(ctx.state.issues.bug).toBe(99);
+      expect(g.count(POST)).toBe(2);
+    });
+  });
+
+  it('issue.label and pr.label: the labels on the issue, added or removed', async () => {
+    const ADD = `POST repos/${REPO}/issues/9/labels`;
+    const LABELS = `GET repos/${REPO}/issues/9/labels?per_page=100`;
+    const g = flaky({ [ADD]: [], [LABELS]: [{ name: 'sev:low' }] }, ADD);
+    await run('issue.label', { issue: 'bug', add: ['sev:low'] }, g.ctx({ state: { issues: { bug: 9 } } }));
+    expect(g.count(ADD)).toBe(1);
+    const missing = flaky({ [ADD]: [], [LABELS]: [] }, ADD);
+    await run('issue.label', { issue: 'bug', add: ['sev:low'] }, missing.ctx({ state: { issues: { bug: 9 } } }));
+    expect(missing.count(ADD)).toBe(2);
+
+    const PADD = `POST repos/${REPO}/issues/5/labels`;
+    const DEL = `DELETE repos/${REPO}/issues/5/labels/needs%3Ahuman`;
+    const PLABELS = `GET repos/${REPO}/issues/5/labels?per_page=100`;
+    const p = flaky({ [PADD]: [], [DEL]: fail('HTTP 404: Label does not exist'), [PLABELS]: [{ name: 'review:please' }] }, PADD, DEL);
+    await run('pr.label', { pr: 'docs', add: ['review:please'], remove: ['needs:human'] }, p.ctx({ state: { prs: { docs: 5 } } }));
+    expect([p.count(PADD), p.count(DEL)]).toEqual([1, 1]);
+  });
+
+  it('repo.apply: the label, the milestone and the ruleset', async () => {
+    const LABEL = `POST repos/${REPO}/labels`;
+    const MILESTONE = `POST repos/${REPO}/milestones`;
+    const RULESET = `POST repos/${REPO}/rulesets`;
+    const finding = (id) => ({ id, category: id.split('.')[0], blocking: false, subject: REPO, message: 'm', fix: { text: 't', commands: [], url: null } });
+    const g = flaky({
+      [`GET repos/yedeya-labs/kanon/contents/requirements.json?ref=${RELEASE}`]: { encoding: 'base64', content: b64({ labels: ['review:please'] }) },
+      [`GET repos/${REPO}/labels?per_page=100`]: [[]],
+      [`GET repos/${REPO}/labels/${encodeURIComponent('review:please')}`]: { name: 'review:please' },
+      [LABEL]: fail('HTTP 422: already_exists'),
+      [`GET repos/${REPO}/milestones?state=all&per_page=100`]: inTurn([[{ title: 'Product Backlog' }]], [[{ title: 'Product Backlog' }, { title: 'Development Automation' }]]),
+      [MILESTONE]: fail('HTTP 422: already_exists'),
+      [`GET repos/${REPO}/rulesets?per_page=100`]: inTurn([[]], [[{ id: 7, name: 'Kanon: default branch' }]]),
+      [RULESET]: fail('HTTP 422: Name must be unique'),
+    }, LABEL, MILESTONE, RULESET);
+    const ids = ['label.create', 'milestone.buckets', 'ruleset.create'];
+    await run('repo.apply', {}, g.ctx({ state: { documents: { init: { release: RELEASE, exit: 0, document: { schema: 'kanon-init/v1', status: 'steps-left', inspection: { mergeQueue: 'no' }, findings: ids.map(finding) } } } } }));
+    expect([g.count(LABEL), g.count(MILESTONE), g.count(RULESET)]).toEqual([1, 1, 1]);
+    expect(g.calls.filter((c) => c.key === MILESTONE).map((c) => c.body)).toEqual([{ title: 'Development Automation' }]);
+  });
+
+  it('ruleset.tags: the ruleset by its name', async () => {
+    const POST = `POST repos/${REPO}/rulesets`;
+    const g = flaky({ [`GET repos/${REPO}/rulesets?per_page=100`]: inTurn([[]], [[{ id: 8, name: 'Release tags' }]]), [POST]: fail('HTTP 422: Name must be unique') }, POST);
+    await run('ruleset.tags', { pattern: 'v*.*.*' }, g.ctx());
+    expect(g.count(POST)).toBe(1);
+  });
+
+  it('environment.create: the tag rule', async () => {
+    const POLICIES = `repos/${REPO}/environments/staging/deployment-branch-policies`;
+    const POST = `POST ${POLICIES}`;
+    const g = flaky({
+      [`PUT repos/${REPO}/environments/staging`]: {},
+      [`GET ${POLICIES}?per_page=100`]: inTurn({ branch_policies: [] }, { branch_policies: [{ id: 4, name: 'v*.*.*', type: 'tag' }] }),
+      [POST]: fail('HTTP 303: already exists'),
+    }, POST);
+    await run('environment.create', { name: 'staging', tags: 'v*.*.*' }, g.ctx());
+    expect(g.count(POST)).toBe(1);
+  });
+
+  it('pr.merge: the merge queue\'s entry, and the auto-merge `pr merge` turned on', async () => {
+    const queue = (queued) => ({ data: { repository: { pullRequest: { id: 'PR_node5', headRefOid: 'abc1234', isMergeQueueEnabled: true, isInMergeQueue: queued, timelineItems: { nodes: [] } } } } });
+    let enqueued = 0;
+    const read = inTurn(queue(false), queue(true));
+    const q = stubGh({
+      'POST graphql': (c) => (/enqueuePullRequest/.test(c.body.query) ? (++enqueued === 1 ? fail(BAD) : fail('HTTP 422: already queued')) : read()),
+      [`GET repos/${REPO}/pulls/5`]: { state: 'closed', merged: true },
+    });
+    await run('pr.merge', { pr: 'docs', via: 'front-door', deadline: 5 }, context({ gh: retrying(q.gh, { sleep: async () => {} }), state: { prs: { docs: 5 } } }));
+    expect(enqueued).toBe(1);
+
+    const AUTO = `pr merge 5 -R ${REPO} --squash --auto`;
+    const plain = (queued) => ({ data: { repository: { pullRequest: { ...queue(queued).data.repository.pullRequest, isMergeQueueEnabled: false } } } });
+    const g = flaky({
+      'POST graphql': plain(false),
+      [AUTO]: fail('auto-merge is already enabled'),
+      [`GET repos/${REPO}/pulls/5`]: inTurn({ state: 'open', merged: false, auto_merge: { merge_method: 'squash' } }, { state: 'closed', merged: true }),
+    }, AUTO);
+    await run('pr.merge', { pr: 'docs', via: 'front-door', deadline: 5 }, g.ctx({ state: { prs: { docs: 5 } } }));
+    expect(g.count(AUTO)).toBe(1);
+    const off = flaky({ 'POST graphql': plain(false), [AUTO]: undefined, [`GET repos/${REPO}/pulls/5`]: inTurn({ state: 'open', merged: false, auto_merge: null }, { state: 'closed', merged: true }) }, AUTO);
+    await run('pr.merge', { pr: 'docs', via: 'front-door', deadline: 5 }, off.ctx({ state: { prs: { docs: 5 } } }));
+    expect(off.count(AUTO)).toBe(2);
+  });
+
+  it('a write with no reliable lookup is asked once, and reads `infra`: workflow.dispatch', async () => {
+    const POST = `POST repos/${REPO}/actions/workflows/apps-check.yml/dispatches`;
+    const g = flaky({ [POST]: undefined }, POST);
+    const e = await run('workflow.dispatch', { workflow: 'apps-check.yml' }, g.ctx()).catch((x) => x);
+    expect(classify(e)).toBe('infra');
+    expect(g.count(POST)).toBe(1);
   });
 });

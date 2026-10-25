@@ -31,7 +31,7 @@ import { pathToFileURL } from 'node:url';
 
 import { takeAsData } from './lib/artifact.mjs';
 import { Fail } from './lib/fail.mjs';
-import { api, notFound } from './lib/gh.mjs';
+import { api, goneFrom, notFound } from './lib/gh.mjs';
 import { exec as realExec, ghProcess } from './lib/proc.mjs';
 import { classify, infra, retrying, retryingExec } from './lib/retry.mjs';
 import { SETTINGS } from './sizing.mjs';
@@ -318,7 +318,7 @@ export async function runSegment(a, deps) {
     }
   } else {
     try {
-      await api(ghCtx, `repos/${a.repository}`, { method: 'DELETE' });
+      await api(ghCtx, `repos/${a.repository}`, { method: 'DELETE', landed: goneFrom(ghCtx, `repos/${a.repository}`) });
       repositoryAction = 'deleted';
     } catch (e) {
       if (notFound(e)) repositoryAction = 'gone';
