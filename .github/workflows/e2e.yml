@@ -14,10 +14,10 @@
 # THE JOBS (§5.2): plan → start (a candidate's run: the Reporter's check run, in_progress) →
 # provision (each scenario's repository, its Apps' secrets, its topics) → model-key (a
 # `claude: subscription` scenario's token, once the real-model ledger admitted it) → kanon-1,
-# act-1, author-label (the Author's label, for a scenario that names one), gate-2, kanon-2,
-# act-2, gate-3, kanon-3, act-3 (each scenario job a pair: a `mint` job that holds a key and a
-# job handed only the token; each gate, the scenarios its phase runs) → verdict → report (the
-# check run's conclusion). docs/jobs.md says which job holds which secret, and why.
+# act-1, gate-2, author-label (the Author's label, for a scenario gate-2 kept that names one),
+# kanon-2, act-2, gate-3, kanon-3, act-3 (each scenario job a pair: a `mint` job that holds a key
+# and a job handed only the token; each gate, the scenarios its phase runs) → verdict → report
+# (the check run's conclusion). docs/jobs.md says which job holds which secret, and why.
 name: e2e
 
 on:
@@ -328,32 +328,10 @@ jobs:
   # ended it, and a scenario with fewer phases has nothing to run, so neither gets a phase-2 job,
   # and no mint is scoped to a repository that may be gone (runner/gate.mjs). It reads whether a
   # scenario ended from its repository's result topic, or its being gone or archived (#24). Holds no key.
-  # THE AUTHOR'S LABEL (E10; the Owner, 2026-10-20): after phase 1, for each scenario whose
-  # scenario.json names an `authorLabel`, the test Author, a member of the scenario's App register,
-  # applies the label to its open pull request, so a model lane's gate admits it (K-AGENT-45). The
-  # driver can't: no register names it. Its own pair, minted from the Author's key; `gh` alone.
-  author-label:
-    name: author-label (${{ matrix.scenario.id }})
-    needs: [plan, start, act-1]
-    if: ${{ !cancelled() && needs.start.result != 'failure' && needs.plan.outputs.go == 'true' && needs.plan.outputs.author-labels != '[]' }}
-    permissions: {}
-    strategy:
-      fail-fast: false
-      max-parallel: 2 # maxParallel() in runner/sizing.mjs, from runner/settings.json
-      matrix:
-        scenario: ${{ fromJSON(needs.plan.outputs.author-labels) }}
-    uses: ./.github/workflows/e2e-author-label-run.yml
-    with:
-      repository-name: e2e-${{ matrix.scenario.id }}-${{ github.run_id }}-${{ github.run_attempt }}
-      head: ${{ matrix.scenario.head }}
-      label: ${{ matrix.scenario.label }}
-    secrets:
-      AUTHOR_APP_ID: ${{ secrets.AUTHOR_APP_ID }}
-      AUTHOR_APP_KEY: ${{ secrets.AUTHOR_APP_KEY }}
-
+  # It also hands `author-label` the labels of the scenarios it kept (#108).
   gate-2:
     name: gate-2 (the scenarios phase 2 runs)
-    needs: [plan, start, act-1, author-label]
+    needs: [plan, start, act-1]
     if: ${{ !cancelled() && needs.start.result != 'failure' && needs.plan.outputs.go == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -361,6 +339,7 @@ jobs:
       contents: read
     outputs:
       scenarios: ${{ steps.gate.outputs.scenarios }}
+      author-labels: ${{ steps.gate.outputs.author-labels }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -375,12 +354,38 @@ jobs:
         env:
           PHASE: 2
           SCENARIOS: ${{ needs.plan.outputs.scenarios }}
+          AUTHOR_LABELS: ${{ needs.plan.outputs.author-labels }}
           GH_TOKEN: ${{ github.token }}
         run: node runner/gate.mjs
 
+  # THE AUTHOR'S LABEL (E10; the Owner, 2026-10-20): after phase 1, for each scenario `gate-2`
+  # kept whose scenario.json names an `authorLabel`, the test Author, a member of the scenario's App register,
+  # applies the label to its open pull request, so a model lane's gate admits it (K-AGENT-45). The
+  # driver can't: no register names it. Its own pair, minted from the Author's key; `gh` alone.
+  # Its matrix is `gate-2`'s, so no Author's token is minted for a repository phase 1 ended (#108);
+  # phase 2 waits for it.
+  author-label:
+    name: author-label (${{ matrix.scenario.id }})
+    needs: [plan, start, gate-2]
+    if: ${{ !cancelled() && needs.start.result != 'failure' && needs.plan.outputs.go == 'true' && needs.gate-2.result == 'success' && needs.gate-2.outputs.author-labels != '[]' }}
+    permissions: {}
+    strategy:
+      fail-fast: false
+      max-parallel: 2 # maxParallel() in runner/sizing.mjs, from runner/settings.json
+      matrix:
+        scenario: ${{ fromJSON(needs.gate-2.outputs.author-labels) }}
+    uses: ./.github/workflows/e2e-author-label-run.yml
+    with:
+      repository-name: e2e-${{ matrix.scenario.id }}-${{ github.run_id }}-${{ github.run_attempt }}
+      head: ${{ matrix.scenario.head }}
+      label: ${{ matrix.scenario.label }}
+    secrets:
+      AUTHOR_APP_ID: ${{ secrets.AUTHOR_APP_ID }}
+      AUTHOR_APP_KEY: ${{ secrets.AUTHOR_APP_KEY }}
+
   kanon-2:
     name: kanon-2 (${{ matrix.scenario.id }})
-    needs: [plan, start, gate-2]
+    needs: [plan, start, gate-2, author-label]
     if: ${{ !cancelled() && needs.start.result != 'failure' && needs.plan.outputs.go == 'true' && needs.gate-2.result == 'success' && needs.gate-2.outputs.scenarios != '[]' }}
     permissions:
       contents: read
@@ -402,7 +407,7 @@ jobs:
 
   act-2:
     name: act-2 (${{ matrix.scenario.id }})
-    needs: [plan, start, gate-2, kanon-2]
+    needs: [plan, start, gate-2, author-label, kanon-2]
     if: ${{ !cancelled() && needs.start.result != 'failure' && needs.plan.outputs.go == 'true' && needs.gate-2.result == 'success' && needs.gate-2.outputs.scenarios != '[]' }}
     permissions:
       contents: read

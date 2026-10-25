@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { maxParallel, SETTINGS } from '../runner/sizing.mjs';
 import { readWorkflows, workflowText } from './helpers/workflows.mjs';
@@ -53,7 +54,7 @@ describe('e2e.yml: its triggers, never a pull request (§7)', () => {
 
 describe('e2e.yml: the jobs of §5.2, in order', () => {
   it('holds exactly plan, start, provision, model-key, the six scenario jobs with a gate before phases 2 and 3, verdict and report', () => {
-    expect(Object.keys(e2e.jobs)).toEqual(['plan', 'start', 'provision', 'model-key', 'kanon-1', 'act-1', 'author-label', 'gate-2', 'kanon-2', 'act-2', 'gate-3', 'kanon-3', 'act-3', 'verdict', 'report']);
+    expect(Object.keys(e2e.jobs)).toEqual(['plan', 'start', 'provision', 'model-key', 'kanon-1', 'act-1', 'gate-2', 'author-label', 'kanon-2', 'act-2', 'gate-3', 'kanon-3', 'act-3', 'verdict', 'report']);
   });
 
   it('`plan` reads with the workflow\'s own token only, and records its marker before any repository is created', () => {
@@ -121,7 +122,7 @@ describe('e2e.yml: the jobs of §5.2, in order', () => {
       expect(job.steps.filter((s) => String(s.uses).startsWith('actions/download-artifact@')), gate).toEqual([]);
       const decide = job.steps.find((s) => s.id === 'gate');
       expect(decide.run, gate).toBe('node runner/gate.mjs');
-      expect(decide.env, gate).toEqual({ PHASE: Number(phase), SCENARIOS: '${{ needs.plan.outputs.scenarios }}', GH_TOKEN: '${{ github.token }}' });
+      expect(decide.env, gate).toEqual({ PHASE: Number(phase), SCENARIOS: '${{ needs.plan.outputs.scenarios }}', GH_TOKEN: '${{ github.token }}', ...(phase === '2' ? { AUTHOR_LABELS: '${{ needs.plan.outputs.author-labels }}' } : {}) });
       // Both of the phase's jobs, and so both of its mints, take their scenarios from the gate.
       for (const name of [`kanon-${phase}`, `act-${phase}`]) {
         expect(e2e.jobs[name].strategy.matrix.scenario, name).toBe(`\${{ fromJSON(needs.${gate}.outputs.scenarios) }}`);
@@ -242,9 +243,19 @@ describe('each pair: a `mint` that holds the key, and a job handed only the toke
     expect(permissionsOf(mintOf('janitor'))).toEqual({ administration: 'write' });
   });
 
-  it('the Author\'s label token labels only, in the one repository: Issues and Pull requests write (E10)', () => {
+  it('the Author\'s label token is for the one repository: Issues and Pull requests write (E10)', () => {
     expect(permissionsOf(mintOf('author-label'))).toEqual({ issues: 'write', 'pull-requests': 'write' });
     expect(mintOf('author-label').with.repositories).toBe('${{ inputs.repository-name }}');
+  });
+
+  // #108: the narrowing to one permission isn't verified against a live mint, so both stay, and
+  // docs/jobs.md names what that costs: a leak can review as the Author, approving included.
+  it('MUTATION: docs/jobs.md names what a leak of the label token can do, reviews included, and why both permissions stay (#108)', () => {
+    const jobs = readFileSync('docs/jobs.md', 'utf8');
+    const leak = jobs.split('\n').find((l) => l.startsWith('**A change to plan 0012 §5.2 and §11**'));
+    expect(leak).toMatch(/submit a review on a pull request as the Author, an approval included/);
+    expect(leak).toMatch(/A stated limit \(#108\)/);
+    expect(leak).toMatch(/not been checked against a live mint/);
   });
 });
 
@@ -295,14 +306,22 @@ describe('the `kanon` and `act` jobs (§5.2)', () => {
     expect(JSON.stringify(docs['e2e-author-label-run.yml'])).not.toMatch(/DRIVER|JUDGE|RELEASER|CLAUDE/);
   });
 
-  it('`author-label` runs after phase 1 for the scenarios `plan` names, and phase 2 waits for it (E10)', () => {
+  // MUTATION (#108): an `author-label` matrix read from `plan` again mints the Author's token for a
+  // repository an `infra` in phase 1 deleted, and this test turns red.
+  it('MUTATION: `author-label` runs after `gate-2`, for the scenarios `plan` names that `gate-2` kept, and phase 2 waits for it (E10, #108)', () => {
     const job = e2e.jobs['author-label'];
-    expect(job.needs).toEqual(['plan', 'start', 'act-1']);
-    expect(job.if).toBe("${{ !cancelled() && needs.start.result != 'failure' && needs.plan.outputs.go == 'true' && needs.plan.outputs.author-labels != '[]' }}");
-    expect(job.strategy.matrix.scenario).toBe('${{ fromJSON(needs.plan.outputs.author-labels) }}');
+    expect(job.needs).toEqual(['plan', 'start', 'gate-2']);
+    expect(job.if).toBe("${{ !cancelled() && needs.start.result != 'failure' && needs.plan.outputs.go == 'true' && needs.gate-2.result == 'success' && needs.gate-2.outputs.author-labels != '[]' }}");
+    expect(job.strategy.matrix.scenario).toBe('${{ fromJSON(needs.gate-2.outputs.author-labels) }}');
     expect(job.secrets).toEqual({ AUTHOR_APP_ID: '${{ secrets.AUTHOR_APP_ID }}', AUTHOR_APP_KEY: '${{ secrets.AUTHOR_APP_KEY }}' });
     expect(e2e.jobs.plan.outputs['author-labels']).toBe('${{ steps.plan.outputs.author-labels }}');
-    expect(e2e.jobs['gate-2'].needs).toContain('author-label');
+    // gate-2 reads `plan`'s labels, and hands on only those of the scenarios it kept.
+    const gate2 = e2e.jobs['gate-2'];
+    expect(gate2.needs).not.toContain('author-label');
+    expect(gate2.outputs['author-labels']).toBe('${{ steps.gate.outputs.author-labels }}');
+    expect(gate2.steps.find((s) => s.id === 'gate').env.AUTHOR_LABELS).toBe('${{ needs.plan.outputs.author-labels }}');
+    // Phase 2 starts only once the label is applied, or skipped.
+    for (const name of ['kanon-2', 'act-2']) expect(e2e.jobs[name].needs, name).toContain('author-label');
   });
 
   it('the model-key job is three steps in `e2e-model`: receive, write the token, revoke; only the second reads the model token', () => {
