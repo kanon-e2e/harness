@@ -87,6 +87,12 @@ describe('the repository is set up as plan 0010 §4 and §12 ask, before the fir
     expect(ofVerb('ruleset.tags')).toEqual([expect.objectContaining({ pattern: 'v*.*.*', bypass: ['releaser'] })]);
   });
 
+  it('runs with no default-branch ruleset, as its README says: repo.apply never sets firstCommit, so init\'s ruleset.first-commit is not applied (#57)', () => {
+    const applies = ofVerb('repo.apply');
+    expect(applies.length).toBeGreaterThan(0);
+    for (const a of applies) expect(a.firstCommit).toBeUndefined();
+  });
+
   it('does all of it before the first release is cut', () => {
     const first = ofVerb('release.cut')[0];
     for (const s of [...ofVerb('environment.create'), ...ofVerb('ruleset.tags'), ...ofVerb('repo.apply')]) expect(at(s)).toBeLessThan(at(first));
