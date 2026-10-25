@@ -453,6 +453,14 @@ describe('expect.row', () => {
     expect(ctx.now()).toBe(start);
   });
 
+  it('with a `job` skipped, names the conclusions of the jobs beside it, from the same jobs call, and none it calls or outside its caller (harness #122)', async () => {
+    const w = world({ names: [[]], jobs: [['lint', 'success'], ['review / filter', 'failure'], ['review / review', 'skipped'], ['review / review / mint', 'skipped'], ['review / reviewer', 'skipped']] });
+    const e = await run('expect.row', { ...step, job: 'review / review' }, ctxOf(w)).catch((x) => x);
+    expect(e).toMatchObject(failsWith(/job `review \/ review` was skipped, so it uploaded none; beside it, `review \/ filter` `failure`, `review \/ reviewer` `skipped`: a job is skipped when one it `needs` didn't succeed, too$/));
+    expect(e.message).not.toMatch(/lint|mint/);
+    expect(w.calls.filter((c) => c.key.includes('/jobs'))).toHaveLength(1);
+  });
+
   it('with a `job`, names its conclusion and its called jobs\' at the deadline when the run uploads no row', async () => {
     const jobs = [['review / filter', 'success'], ['review / review / mint', 'success'], ['review / review / review / review', 'failure'], ['review / reviewer', 'skipped']];
     const e = await run('expect.row', { ...step, job: 'review / review', deadline: 1 }, ctxOf(world({ names: [[]], jobs }))).catch((x) => x);

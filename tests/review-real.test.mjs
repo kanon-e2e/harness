@@ -136,8 +136,26 @@ describe('review-real\'s expectations on a reviewed run, and on runs that must f
     });
     const ctx = context({ gh, state: { runs: { review: RUN } } });
     const start = ctx.now();
-    await expect(VOCABULARY['expect.row'].run(bare(row), ctx)).rejects.toMatchObject({ ...fails, message: expect.stringMatching(/job `review \/ review` was skipped/) });
+    await expect(VOCABULARY['expect.row'].run(bare(row), ctx)).rejects.toMatchObject({ ...fails, message: expect.stringMatching(/job `review \/ review` was skipped.*`review \/ filter` `success`/) });
     expect(ctx.now()).toBe(start);
+  });
+
+  it('the row: a skip from a `review / filter` that didn\'t succeed names the filter\'s conclusion, so it doesn\'t read as a gate refusal (harness #122)', async () => {
+    for (const conclusion of ['failure', 'cancelled', 'skipped']) {
+      const { gh } = stubGh({
+        [`GET repos/${REPO}/actions/runs/${RUN}/artifacts?per_page=100`]: { artifacts: [] },
+        [`GET repos/${REPO}/actions/runs/${RUN}/jobs?per_page=100`]: { jobs: [{ id: 1, name: 'review / filter', conclusion }, { id: 2, name: 'review / notify-unlabeled', conclusion: 'skipped' }, { id: 3, name: 'review / review', conclusion: 'skipped' }] },
+      });
+      await expect(VOCABULARY['expect.row'].run(bare(row), context({ gh, state: { runs: { review: RUN } } })))
+        .rejects.toMatchObject({ ...fails, message: expect.stringMatching(new RegExp(`was skipped.*\`review / filter\` \`${conclusion}\``)) });
+    }
+  });
+
+  it('the README\'s "When it is red" reads a skipped `review / review` by the filter\'s conclusion (harness #122)', () => {
+    const red = s.read('README.md').split('## When it is red')[1];
+    const skip = red.split('`review / review` was skipped.**')[1].split('\n- ')[0];
+    expect(skip).toMatch(/`review \/ filter` `success`: the gate refused the label/);
+    expect(skip).toMatch(/`review \/ filter` `failure`, `cancelled` or `skipped`: the filter didn't succeed/);
   });
 
   it('the run: passes when the review ran; fails when the gate refused the label, or the agent failed', async () => {
