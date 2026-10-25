@@ -105,13 +105,20 @@ describe.each(Object.entries(SCENARIOS))('%s', (id, { rule, ref, secrets }) => {
     }
   });
 
-  it(`the broken caller differs from the correct one only in the breakage: ${rule === 'pin' ? `the pin \`@${ref}\`` : '`secrets: inherit`'}`, () => {
+  it(`the broken caller differs from the correct one only in the breakage, in both directions: ${rule === 'pin' ? `the pin \`@${ref}\`` : '`secrets: inherit`'}`, () => {
     const broken = s.read(`broken/${CALLER}`);
     const fixed = s.read(`fixed/${CALLER}`);
     const code = (t) => t.split('\n').filter((l) => !l.startsWith('#'));
-    const changed = code(broken).filter((l) => !code(fixed).includes(l));
-    if (rule === 'pin') expect(changed).toEqual([`    uses: yedeya-labs/kanon/.github/workflows/apps-check.yml@${ref}`]);
-    else expect(changed).toEqual(['    secrets: inherit']);
+    // Both directions: a line broken/ adds, and a line it drops (#96).
+    const added = code(broken).filter((l) => !code(fixed).includes(l));
+    const dropped = code(fixed).filter((l) => !code(broken).includes(l));
+    if (rule === 'pin') {
+      expect(added).toEqual([`    uses: yedeya-labs/kanon/.github/workflows/apps-check.yml@${ref}`]);
+      expect(dropped).toEqual(['    uses: yedeya-labs/kanon/.github/workflows/apps-check.yml@{{release}}']);
+    } else {
+      expect(added).toEqual(['    secrets: inherit']);
+      expect(dropped).toEqual(['    secrets:', '      JUDGE_APP_ID: ${{ secrets.JUDGE_APP_ID }}', '      JUDGE_APP_PRIVATE_KEY: ${{ secrets.JUDGE_APP_PRIVATE_KEY }}']);
+    }
     expect(parse(broken).jobs.apps.secrets).toEqual(secrets === 'inherit' ? 'inherit' : { JUDGE_APP_ID: '${{ secrets.JUDGE_APP_ID }}', JUDGE_APP_PRIVATE_KEY: '${{ secrets.JUDGE_APP_PRIVATE_KEY }}' });
   });
 
