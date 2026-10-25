@@ -24,7 +24,9 @@ Before the first release, the `act` job sets the repository up as plan 0010 §4 
 - **`production`**, the same, with the Owner (`environmentReviewer` in [`runner/settings.json`](../../runner/settings.json)) as its required reviewer, and self-review prevented.
 - **`Release tags`**, an active tag ruleset on `v*.*.*` with the creation, update and deletion rules, which the Releaser bypasses. The major tag `v0`, which Kanon's release workflow moves, is outside the pattern.
 
-`register.write` writes the App register's rows (`docs/qa/agent-identities.md`) for the Judge and the Releaser, as `kanon apps --reuse` would. Without the register, `lane-check` fails CI on every commit ("the App register is missing (K-LAYOUT-6)"), and the deploy lane's gate refuses a red commit (`ci-red`, K-SHIP-8). The Judge is there because the review lane `init` installs reads the Reviewer's slug from it. `repo.apply` also does what `init` leaves to a person: squash-only merging, which Kanon's release workflow requires, the labels, the milestones and the default branch's ruleset.
+`register.write` writes the App register's rows (`docs/qa/agent-identities.md`) for the Judge and the Releaser, as `kanon apps --reuse` would. Without the register, `lane-check` fails CI on every commit ("the App register is missing (K-LAYOUT-6)"), and the deploy lane's gate refuses a red commit (`ci-red`, K-SHIP-8). The Judge is there because the review lane `init` installs reads the Reviewer's slug from it. `repo.apply` also does what `init` leaves to a person: squash-only merging, which Kanon's release workflow requires, the labels and the milestones.
+
+**The rehearsal runs with no default-branch ruleset.** The repository has no commit when `init` runs, so `init` reports `ruleset.first-commit`, not `ruleset.create`, and `repo.apply` applies only the findings the document names. The scenario doesn't set `repo.apply`'s `firstCommit` flag, which would count `ruleset.first-commit` as `ruleset.create`, so no ruleset protects the default branch: the front-door merges and `release.cut` run without one. Its ten burn-in passes ran the same way.
 
 ## The three releases
 
@@ -57,7 +59,7 @@ Every run, a candidate's included, cancels the first release's run as soon as `p
 One public repository in `kanon-e2e`, `e2e-deploy-rehearsal-<run>-<attempt>`, holding the following:
 
 - the two environments;
-- the tag ruleset and the default branch's ruleset;
+- the tag ruleset (and no default-branch ruleset);
 - three Releases and their tags;
 - the moved `v0` tag;
 - staging's issue;

@@ -40,7 +40,7 @@ One phase. Every push to the default branch comes before the ruleset exists; aft
 | 1 | `act` | `expect.run` | The run concluded `success`, and its job `Lane check` `success`. |
 | 1 | `act` | `expect.check` | `Lane check` on `fixed`'s head concluded `success`. |
 
-**What it can't hold.** lane-check's annotation names the rule it broke, but an expectation never reads prose (§4.3), and lane-check writes no marker. So the scenario holds the conclusion, and the pair of pull requests holds the cause: the only difference between the red one and the green one is the breakage. `tests/lane-check-scenarios.test.mjs` holds the two files to differ only there.
+**What it can't hold.** lane-check's annotation names the rule it broke, but an expectation never reads prose (§4.3), and lane-check writes no marker. So the scenario holds the conclusion, and the pair of pull requests holds the cause: the only difference between the red one and the green one is the breakage. `tests/lane-check-scenarios.test.mjs` holds the two files to differ only there, in both directions: `broken/` adds no other line and drops none.
 
 ## What it creates
 

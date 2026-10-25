@@ -4,7 +4,8 @@
 // `files.commit` commits `from: scenario`, so a file committed after the install can pin the
 // release under test, as every Kanon reference must (harness E12, the `lane-check` family). A
 // workflow's `${{ expression }}` is not a substitution, and a binary file (one with a NUL byte) is
-// left as it is.
+// left as it is. This module is their one implementation: the validator, the runner and
+// `files.commit` import it, so `start/` and a `files.commit` directory can't take different syntax.
 
 /** The two substitutions. */
 export const SUBSTITUTIONS = Object.freeze(['release', 'repository']);

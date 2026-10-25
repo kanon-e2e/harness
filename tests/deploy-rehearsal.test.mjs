@@ -36,7 +36,7 @@ describe('the deploy rehearsal is a valid scenario of the deploy family', () => 
     expect(validateScenarioDir(DIR)).toEqual([]);
   });
 
-  it('scenario.json: family deploy, no model, no Claude, the Releaser, and no gate yet', () => {
+  it('scenario.json: family deploy, no model, no Claude, the Releaser, and gate: true (burnt in)', () => {
     expect(scenario).toMatchObject({ id: 'deploy-rehearsal', family: 'deploy', tier: 'none', claude: 'none', gate: true });
     expect(scenario.apps).toContain('releaser');
     // The review lane init installs reads the Reviewer's slug from the App register (K-LAYOUT-6).
@@ -85,6 +85,12 @@ describe('the repository is set up as plan 0010 §4 and §12 ask, before the fir
 
   it('restricts the release tags with a ruleset the Releaser bypasses', () => {
     expect(ofVerb('ruleset.tags')).toEqual([expect.objectContaining({ pattern: 'v*.*.*', bypass: ['releaser'] })]);
+  });
+
+  it('runs with no default-branch ruleset, as its README says: repo.apply never sets firstCommit, so init\'s ruleset.first-commit is not applied (#57)', () => {
+    const applies = ofVerb('repo.apply');
+    expect(applies.length).toBeGreaterThan(0);
+    for (const a of applies) expect(a.firstCommit).toBeUndefined();
   });
 
   it('does all of it before the first release is cut', () => {
