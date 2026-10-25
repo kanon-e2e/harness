@@ -15,7 +15,7 @@
 # provision (each scenario's repository, its Apps' secrets, its topics) → model-key (a
 # `claude: subscription` scenario's token, once the real-model ledger admitted it) → kanon-1,
 # act-1, gate-2, author-label (the Author's label, for a scenario gate-2 kept that names one),
-# kanon-2, act-2, gate-3, kanon-3, act-3 (each scenario job a pair: a `mint` job that holds a key
+# author-dispatch (the Author's dispatch, likewise, #123), kanon-2, act-2, gate-3, kanon-3, act-3 (each scenario job a pair: a `mint` job that holds a key
 # and a job handed only the token; each gate, the scenarios its phase runs) → verdict → report
 # (the check run's conclusion). docs/jobs.md says which job holds which secret, and why.
 name: e2e
@@ -63,6 +63,8 @@ jobs:
       skipped: ${{ steps.plan.outputs.skipped }}
       # The planned scenarios whose `authorLabel` the Author applies after phase 1 (E10).
       author-labels: ${{ steps.plan.outputs.author-labels }}
+      # The planned scenarios whose `authorDispatch` the Author dispatches after phase 1 (#123).
+      author-dispatches: ${{ steps.plan.outputs.author-dispatches }}
       marker: ${{ steps.plan.outputs.marker }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -256,6 +258,20 @@ jobs:
             fi
           done
           echo "Set ${want[*]}, as $RELEASE's guard checks them."
+      # THE DEAD CHAT WEBHOOK (#123; the Owner, 2026-10-25): for a scenario whose scenario.json sets
+      # `chatPlaceholder`, a fixed Slack incoming-webhook URL that no workspace holds, so it is
+      # well-formed and never valid. Slack refuses it as it refuses a revoked one, and the project
+      # digest's `notify` job fails on it. It is no secret, so it lives here, not in `e2e`; it is
+      # written with this job's Secrets write, so the act job's token stays as it is.
+      - name: Write the dead chat webhook (chatPlaceholder)
+        if: ${{ matrix.scenario.chatPlaceholder == true }}
+        env:
+          GH_TOKEN: ${{ steps.repo.outputs.token }}
+          PLACEHOLDER: https://hooks.slack.com/services/T00000000/B00000000/XXXXXXXXXXXXXXXXXXXXXXXX
+        run: |
+          set -euo pipefail
+          printf %s "$PLACEHOLDER" | gh secret set KANON_CHAT_PROJECT_DIGEST -R "$ORG/$REPO_NAME"
+          echo "Wrote KANON_CHAT_PROJECT_DIGEST, the never-valid placeholder."
       - name: Mark the repository provisioned
         env:
           GH_TOKEN: ${{ steps.repo.outputs.token }}
@@ -328,7 +344,8 @@ jobs:
   # ended it, and a scenario with fewer phases has nothing to run, so neither gets a phase-2 job,
   # and no mint is scoped to a repository that may be gone (runner/gate.mjs). It reads whether a
   # scenario ended from its repository's result topic, or its being gone or archived (#24). Holds no key.
-  # It also hands `author-label` the labels of the scenarios it kept (#108).
+  # It also hands `author-label` the labels of the scenarios it kept (#108), and `author-dispatch`
+  # their dispatches (#123).
   gate-2:
     name: gate-2 (the scenarios phase 2 runs)
     needs: [plan, start, act-1]
@@ -340,6 +357,7 @@ jobs:
     outputs:
       scenarios: ${{ steps.gate.outputs.scenarios }}
       author-labels: ${{ steps.gate.outputs.author-labels }}
+      author-dispatches: ${{ steps.gate.outputs.author-dispatches }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -355,6 +373,7 @@ jobs:
           PHASE: 2
           SCENARIOS: ${{ needs.plan.outputs.scenarios }}
           AUTHOR_LABELS: ${{ needs.plan.outputs.author-labels }}
+          AUTHOR_DISPATCHES: ${{ needs.plan.outputs.author-dispatches }}
           GH_TOKEN: ${{ github.token }}
         run: node runner/gate.mjs
 
@@ -383,9 +402,33 @@ jobs:
       AUTHOR_APP_ID: ${{ secrets.AUTHOR_APP_ID }}
       AUTHOR_APP_KEY: ${{ secrets.AUTHOR_APP_KEY }}
 
+  # THE AUTHOR'S DISPATCH (#123; the Owner, 2026-10-25): after phase 1, for each scenario `gate-2`
+  # kept whose scenario.json names an `authorDispatch`, the test Author, a member of the scenario's
+  # App register, dispatches the workflow on the default branch, so a lane whose gate admits a
+  # dispatch only by a member or a registered App starts (K-AGENT-45). The driver can't: no register
+  # names it. Its own pair, minted from the Author's key with Actions write; `gh` alone. Its matrix
+  # is `gate-2`'s, as `author-label`'s is; phase 2 waits for it.
+  author-dispatch:
+    name: author-dispatch (${{ matrix.scenario.id }})
+    needs: [plan, start, gate-2]
+    if: ${{ !cancelled() && needs.start.result != 'failure' && needs.plan.outputs.go == 'true' && needs.gate-2.result == 'success' && needs.gate-2.outputs.author-dispatches != '[]' }}
+    permissions: {}
+    strategy:
+      fail-fast: false
+      max-parallel: 2 # maxParallel() in runner/sizing.mjs, from runner/settings.json
+      matrix:
+        scenario: ${{ fromJSON(needs.gate-2.outputs.author-dispatches) }}
+    uses: ./.github/workflows/e2e-author-dispatch-run.yml
+    with:
+      repository-name: e2e-${{ matrix.scenario.id }}-${{ github.run_id }}-${{ github.run_attempt }}
+      workflow: ${{ matrix.scenario.workflow }}
+    secrets:
+      AUTHOR_APP_ID: ${{ secrets.AUTHOR_APP_ID }}
+      AUTHOR_APP_KEY: ${{ secrets.AUTHOR_APP_KEY }}
+
   kanon-2:
     name: kanon-2 (${{ matrix.scenario.id }})
-    needs: [plan, start, gate-2, author-label]
+    needs: [plan, start, gate-2, author-label, author-dispatch]
     if: ${{ !cancelled() && needs.start.result != 'failure' && needs.plan.outputs.go == 'true' && needs.gate-2.result == 'success' && needs.gate-2.outputs.scenarios != '[]' }}
     permissions:
       contents: read
@@ -407,7 +450,7 @@ jobs:
 
   act-2:
     name: act-2 (${{ matrix.scenario.id }})
-    needs: [plan, start, gate-2, author-label, kanon-2]
+    needs: [plan, start, gate-2, author-label, author-dispatch, kanon-2]
     if: ${{ !cancelled() && needs.start.result != 'failure' && needs.plan.outputs.go == 'true' && needs.gate-2.result == 'success' && needs.gate-2.outputs.scenarios != '[]' }}
     permissions:
       contents: read

@@ -12,9 +12,9 @@ import { readWorkflows, workflowText } from './helpers/workflows.mjs';
 
 const docs = readWorkflows();
 const e2e = docs['e2e.yml'];
-const PAIRS = ['kanon', 'act', 'model-key', 'janitor', 'author-label'];
-/** The App each pair's `mint` holds the key of: the driver's, but the Author's for its label (E10). */
-const KEY_OF = (pair) => (pair === 'author-label' ? 'AUTHOR' : 'DRIVER');
+const PAIRS = ['kanon', 'act', 'model-key', 'janitor', 'author-label', 'author-dispatch'];
+/** The App each pair's `mint` holds the key of: the driver's, but the Author's for its label (E10) and its dispatch (#123). */
+const KEY_OF = (pair) => (pair.startsWith('author-') ? 'AUTHOR' : 'DRIVER');
 const TOKEN_ACTION = /^actions\/create-github-app-token@[0-9a-f]{40}$/;
 const SCENARIO_JOBS = ['kanon-1', 'act-1', 'kanon-2', 'act-2', 'kanon-3', 'act-3'];
 const GATES = ['gate-2', 'gate-3'];
@@ -54,7 +54,7 @@ describe('e2e.yml: its triggers, never a pull request (§7)', () => {
 
 describe('e2e.yml: the jobs of §5.2, in order', () => {
   it('holds exactly plan, start, provision, model-key, the six scenario jobs with a gate before phases 2 and 3, verdict and report', () => {
-    expect(Object.keys(e2e.jobs)).toEqual(['plan', 'start', 'provision', 'model-key', 'kanon-1', 'act-1', 'gate-2', 'author-label', 'kanon-2', 'act-2', 'gate-3', 'kanon-3', 'act-3', 'verdict', 'report']);
+    expect(Object.keys(e2e.jobs)).toEqual(['plan', 'start', 'provision', 'model-key', 'kanon-1', 'act-1', 'gate-2', 'author-label', 'author-dispatch', 'kanon-2', 'act-2', 'gate-3', 'kanon-3', 'act-3', 'verdict', 'report']);
   });
 
   it('`plan` reads with the workflow\'s own token only, and records its marker before any repository is created', () => {
@@ -122,7 +122,7 @@ describe('e2e.yml: the jobs of §5.2, in order', () => {
       expect(job.steps.filter((s) => String(s.uses).startsWith('actions/download-artifact@')), gate).toEqual([]);
       const decide = job.steps.find((s) => s.id === 'gate');
       expect(decide.run, gate).toBe('node runner/gate.mjs');
-      expect(decide.env, gate).toEqual({ PHASE: Number(phase), SCENARIOS: '${{ needs.plan.outputs.scenarios }}', GH_TOKEN: '${{ github.token }}', ...(phase === '2' ? { AUTHOR_LABELS: '${{ needs.plan.outputs.author-labels }}' } : {}) });
+      expect(decide.env, gate).toEqual({ PHASE: Number(phase), SCENARIOS: '${{ needs.plan.outputs.scenarios }}', GH_TOKEN: '${{ github.token }}', ...(phase === '2' ? { AUTHOR_LABELS: '${{ needs.plan.outputs.author-labels }}', AUTHOR_DISPATCHES: '${{ needs.plan.outputs.author-dispatches }}' } : {}) });
       // Both of the phase's jobs, and so both of its mints, take their scenarios from the gate.
       for (const name of [`kanon-${phase}`, `act-${phase}`]) {
         expect(e2e.jobs[name].strategy.matrix.scenario, name).toBe(`\${{ fromJSON(needs.${gate}.outputs.scenarios) }}`);
@@ -165,12 +165,29 @@ describe('e2e.yml: the jobs of §5.2, in order', () => {
     expect(JSON.stringify(e2e.jobs.provision)).not.toMatch(/CLAUDE|OAUTH|ANTHROPIC/i);
     expect(e2e.jobs.provision.steps.at(-1).run).toMatch(/kanon-e2e-provisioned/);
   });
+
+  // MUTATION (#123): the dead webhook is written for every scenario, or under another name, or with
+  // a URL Kanon's Slack hook would refuse by shape, and this test turns red.
+  it('MUTATION: `provision` writes the dead chat webhook as `KANON_CHAT_PROJECT_DIGEST` only for a scenario with `chatPlaceholder`, before marking it provisioned (#123)', () => {
+    const steps = e2e.jobs.provision.steps;
+    const i = steps.findIndex((s) => s.name === 'Write the dead chat webhook (chatPlaceholder)');
+    expect(i).toBeGreaterThan(-1);
+    expect(i).toBe(steps.length - 2);
+    const step = steps[i];
+    expect(step.if).toBe('${{ matrix.scenario.chatPlaceholder == true }}');
+    expect(step.env).toEqual({ GH_TOKEN: '${{ steps.repo.outputs.token }}', PLACEHOLDER: 'https://hooks.slack.com/services/T00000000/B00000000/XXXXXXXXXXXXXXXXXXXXXXXX' });
+    expect(step.env.PLACEHOLDER).toMatch(/^https:\/\/hooks\.slack\.com\/services\/[A-Za-z0-9_/-]+$/);
+    expect(step.run).toMatch(/printf %s "\$PLACEHOLDER" \| gh secret set KANON_CHAT_PROJECT_DIGEST -R "\$ORG\/\$REPO_NAME"/);
+    // It is the only step that writes a chat secret, and no other job writes one.
+    expect(steps.filter((s) => /KANON_CHAT_/.test(JSON.stringify(s)))).toEqual([step]);
+    expect(Object.entries(e2e.jobs).filter(([n, j]) => n !== 'provision' && /KANON_CHAT_/.test(JSON.stringify(j)))).toEqual([]);
+  });
 });
 
 describe('the sizing and the timeouts follow runner/settings.json', () => {
   it('every matrix runs at maxParallel(), with fail-fast off, and says where the number comes from', () => {
     const matrixJobs = Object.entries(e2e.jobs).filter(([, j]) => j.strategy);
-    expect(matrixJobs.map(([n]) => n)).toEqual(['provision', 'model-key', 'kanon-1', 'act-1', 'author-label', 'kanon-2', 'act-2', 'kanon-3', 'act-3']);
+    expect(matrixJobs.map(([n]) => n)).toEqual(['provision', 'model-key', 'kanon-1', 'act-1', 'author-label', 'author-dispatch', 'kanon-2', 'act-2', 'kanon-3', 'act-3']);
     for (const [name, job] of matrixJobs) {
       expect(job.strategy['max-parallel'], name).toBe(maxParallel());
       expect(job.strategy['fail-fast'], name).toBe(false);
@@ -185,6 +202,7 @@ describe('the sizing and the timeouts follow runner/settings.json', () => {
     for (const pair of PAIRS) expect(docs[`e2e-${pair}-run.yml`].jobs.mint['timeout-minutes'], pair).toBe(SETTINGS.minutes.mint);
     expect(only(docs['e2e-model-key-job.yml'])['timeout-minutes']).toBe(SETTINGS.minutes.modelKey);
     expect(only(docs['e2e-author-label-job.yml'])['timeout-minutes']).toBe(SETTINGS.minutes.authorLabel);
+    expect(only(docs['e2e-author-dispatch-job.yml'])['timeout-minutes']).toBe(SETTINGS.minutes.authorDispatch);
     expect(only(docs['e2e-kanon-job.yml'])['timeout-minutes']).toBe(SETTINGS.minutes.kanon);
     expect(only(docs['e2e-act-job.yml'])['timeout-minutes']).toBe(SETTINGS.minutes.act);
   });
@@ -246,6 +264,19 @@ describe('each pair: a `mint` that holds the key, and a job handed only the toke
   it('the Author\'s label token is for the one repository: Issues and Pull requests write (E10)', () => {
     expect(permissionsOf(mintOf('author-label'))).toEqual({ issues: 'write', 'pull-requests': 'write' });
     expect(mintOf('author-label').with.repositories).toBe('${{ inputs.repository-name }}');
+  });
+
+  it('MUTATION: the Author\'s dispatch token is for the one repository: Actions write, and nothing more (#123)', () => {
+    expect(permissionsOf(mintOf('author-dispatch'))).toEqual({ actions: 'write' });
+    expect(mintOf('author-dispatch').with.repositories).toBe('${{ inputs.repository-name }}');
+  });
+
+  it('MUTATION: docs/jobs.md records the Author\'s Actions write as a dated change to plan 0012 §5.2 and §11, with what a leak can do (#123)', () => {
+    const jobs = readFileSync('docs/jobs.md', 'utf8');
+    const leak = jobs.split('\n').find((l) => l.startsWith('**A second change to plan 0012 §5.2 and §11**'));
+    expect(leak).toMatch(/the Owner, 2026-10-25, #123/);
+    expect(leak).toMatch(/Actions write/);
+    expect(leak).toMatch(/cancel or re-run its runs/);
   });
 
   // #108: the narrowing to one permission isn't verified against a live mint, so both stay, and
@@ -322,6 +353,35 @@ describe('the `kanon` and `act` jobs (§5.2)', () => {
     expect(gate2.steps.find((s) => s.id === 'gate').env.AUTHOR_LABELS).toBe('${{ needs.plan.outputs.author-labels }}');
     // Phase 2 starts only once the label is applied, or skipped.
     for (const name of ['kanon-2', 'act-2']) expect(e2e.jobs[name].needs, name).toContain('author-label');
+  });
+
+  it('the Author\'s dispatch job is three steps with no environment: receive, dispatch with `gh` on the default branch, revoke; no checkout, no harness or Kanon code (K-AGENT-50)', () => {
+    const job = only(docs['e2e-author-dispatch-job.yml']);
+    expect(job.environment).toBeUndefined();
+    expect(job.permissions).toEqual({});
+    expect(job.steps).toHaveLength(3);
+    expect(job.steps.every((s) => s.uses === undefined)).toBe(true);
+    expect(job.steps[1].run).toMatch(/gh api -X POST "repos\/\$REPOSITORY\/actions\/workflows\/\$WORKFLOW\/dispatches" -f "ref=\$branch"/);
+    expect(job.steps[1].run).toMatch(/\.default_branch/);
+    expect(job.steps.map((x) => x.run).join('\n')).not.toMatch(/\bnode\b|\bnpx\b|\bnpm\b|runner\/|yedeya-labs\/kanon|checkout/);
+    expect(JSON.stringify(docs['e2e-author-dispatch-run.yml'])).not.toMatch(/DRIVER|JUDGE|RELEASER|CLAUDE/);
+  });
+
+  // MUTATION (#123): an `author-dispatch` matrix read from `plan` would mint the Author's token for
+  // a repository phase 1 ended, and phase 2 not waiting would race the dispatch.
+  it('MUTATION: `author-dispatch` runs after `gate-2`, for the scenarios `plan` names that `gate-2` kept, and phase 2 waits for it (#123)', () => {
+    const job = e2e.jobs['author-dispatch'];
+    expect(job.needs).toEqual(['plan', 'start', 'gate-2']);
+    expect(job.if).toBe("${{ !cancelled() && needs.start.result != 'failure' && needs.plan.outputs.go == 'true' && needs.gate-2.result == 'success' && needs.gate-2.outputs.author-dispatches != '[]' }}");
+    expect(job.strategy.matrix.scenario).toBe('${{ fromJSON(needs.gate-2.outputs.author-dispatches) }}');
+    expect(job.uses).toBe('./.github/workflows/e2e-author-dispatch-run.yml');
+    expect(job.with).toEqual({ 'repository-name': 'e2e-${{ matrix.scenario.id }}-${{ github.run_id }}-${{ github.run_attempt }}', workflow: '${{ matrix.scenario.workflow }}' });
+    expect(job.secrets).toEqual({ AUTHOR_APP_ID: '${{ secrets.AUTHOR_APP_ID }}', AUTHOR_APP_KEY: '${{ secrets.AUTHOR_APP_KEY }}' });
+    expect(e2e.jobs.plan.outputs['author-dispatches']).toBe('${{ steps.plan.outputs.author-dispatches }}');
+    const gate2 = e2e.jobs['gate-2'];
+    expect(gate2.needs).not.toContain('author-dispatch');
+    expect(gate2.outputs['author-dispatches']).toBe('${{ steps.gate.outputs.author-dispatches }}');
+    for (const name of ['kanon-2', 'act-2']) expect(e2e.jobs[name].needs, name).toContain('author-dispatch');
   });
 
   it('the model-key job is three steps in `e2e-model`: receive, write the token, revoke; only the second reads the model token', () => {

@@ -450,6 +450,28 @@ describe('the real-model ledger in `plan` (§6.2, E10)', () => {
     expect((await plan({ event: 'schedule', schedule: POLL, catalogue: labelled }, world())).authorLabels).toEqual([]);
   });
 
+  it('MUTATION: hands the `author-dispatch` job each planned scenario\'s `authorDispatch`, and none for a scenario the ledger left out (#123)', async () => {
+    const dispatched = CATALOGUE.map((x) => (x.id === 'review-real' ? { ...x, authorDispatch: { workflow: 'agent-project-digest.yml' } } : x));
+    const ran = await plan({ event: 'schedule', schedule: POLL, catalogue: dispatched }, world({ history: [0.5] }));
+    expect(ran.authorDispatches).toEqual([{ id: 'review-real', workflow: 'agent-project-digest.yml' }]);
+    expect(ran.authorLabels).toEqual([]);
+    const refused = await plan({ event: 'schedule', schedule: POLL, catalogue: dispatched }, world({ history: [3] }));
+    expect(refused.authorDispatches).toEqual([]);
+    expect((await plan({ event: 'schedule', schedule: POLL, catalogue: dispatched }, world())).authorDispatches).toEqual([]);
+  });
+
+  it('MUTATION: a scenario\'s matrix entry carries `chatPlaceholder` only where scenario.json sets it, for `provision`\'s dead webhook (#123)', async () => {
+    const placeholder = CATALOGUE.map((x) => (x.id === 'deploy-rehearsal' ? { ...x, chatPlaceholder: true } : x.id === 'install-review' ? { ...x, chatPlaceholder: false } : x));
+    const out = await plan({ event: 'workflow_dispatch', release: 'v0.41.0', select: 'install-review' }, world());
+    expect(out.scenarios.every((x) => !('chatPlaceholder' in x))).toBe(true);
+    const byId = Object.fromEntries([
+      ...(await plan({ event: 'workflow_dispatch', release: 'v0.41.0', select: 'deploy-rehearsal', catalogue: placeholder }, world())).scenarios,
+      ...(await plan({ event: 'workflow_dispatch', release: 'v0.41.0', select: 'install-review', catalogue: placeholder }, world())).scenarios,
+    ].map((x) => [x.id, x]));
+    expect(byId['deploy-rehearsal']).toEqual({ id: 'deploy-rehearsal', apps: ['releaser'], claude: 'none', gate: false, chatPlaceholder: true });
+    expect(byId['install-review']).toEqual({ id: 'install-review', apps: ['author', 'judge'], claude: 'none', gate: false });
+  });
+
   it('reads the history only for a run that goes ahead, and only for the real-model scenarios', async () => {
     const held = await nightly(world({ nightlyRecord: ago(60) }));
     expect(held.g.calls.some((c) => /kanon-e2e-result-/.test(c.key))).toBe(false);
@@ -524,8 +546,10 @@ describe('`runsOn`: a scenario takes part only in the kinds of run it names (#13
 
   it('leaving `runsOn` out is every kind of run: no existing scenario changes', async () => {
     const { scenarioDirs, loadScenario } = await import('../runner/validate.mjs');
-    const catalogue = scenarioDirs().map((d) => loadScenario(d).scenario);
-    expect(catalogue.some((s) => 'runsOn' in s)).toBe(false);
+    const all = scenarioDirs().map((d) => loadScenario(d).scenario);
+    // Only notify-revoked names it (#123); every other scenario leaves it out, and plans as before.
+    expect(all.filter((s) => 'runsOn' in s).map((s) => s.id)).toEqual(['notify-revoked']);
+    const catalogue = all.filter((s) => !('runsOn' in s));
     const every = catalogue.map((s) => ({ ...s, runsOn: ['candidate', 'dispatch', 'scheduled'] }));
     for (const input of [{ event: 'schedule', schedule: POLL }, { event: 'schedule', schedule: NIGHTLY }, { event: 'workflow_dispatch', release: 'v0.41.0' }, { event: 'workflow_dispatch', release: 'candidate-v0.42.0' }, { event: 'workflow_dispatch', release: 'v0.41.0', select: 'install' }]) {
       const [a, b] = [await plan({ ...input, catalogue }, world()), await plan({ ...input, catalogue: every }, world())];

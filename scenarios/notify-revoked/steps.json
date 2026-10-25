@@ -1,0 +1,38 @@
+{
+  "phases": [
+    {
+      "kanon": [
+        { "verb": "kanon.init", "flags": ["--lanes=review,project-digest", "--review-trigger=labelled", "--chat=slack", "--claude-auth=subscription", "--no-sensitive-data"] },
+        { "verb": "register.write" },
+        { "verb": "expect.init", "status": "steps-left", "findings": ["label.create", "milestone.buckets", "ruleset.first-commit"], "fields": [{ "pointer": "/pin", "equals": "{{release}}" }, { "pointer": "/answers/chat", "equals": "slack" }] }
+      ],
+      "act": [
+        { "verb": "files.commit", "from": "kanon", "message": "Install Kanon's review lane and daily project digest, with Kanon's Slack hook" },
+        { "verb": "bootstrap.end", "move": "record" },
+        { "verb": "repo.apply", "firstCommit": true },
+        { "verb": "workflow.dispatch", "workflow": "apps-check.yml" },
+        { "verb": "run.await", "name": "apps-check", "workflow": "apps-check.yml", "event": "workflow_dispatch", "branch": "main", "deadline": 10 },
+        { "verb": "expect.run", "run": "apps-check", "conclusion": "success", "jobs": [{ "name": "apps / Judge", "conclusion": "success" }], "deadline": 2 },
+        { "verb": "run.await", "name": "ci", "workflow": "ci.yml", "event": "push", "branch": "main", "deadline": 10 },
+        { "verb": "expect.check", "branch": "main", "name": "Lane check", "conclusion": "success", "deadline": 5 },
+        { "verb": "repo.apply", "firstCommit": true },
+        { "verb": "bootstrap.end", "move": "approval" }
+      ]
+    },
+    {
+      "kanon": [],
+      "act": [
+        { "verb": "run.await", "name": "digest", "workflow": "agent-project-digest.yml", "event": "workflow_dispatch", "branch": "main", "actor": "author", "deadline": 30 },
+        { "verb": "expect.row", "run": "digest", "lane": "project-digest", "job": "digest / digest", "ceilingUsd": 10, "deadline": 5 },
+        { "verb": "expect.run", "run": "digest", "conclusion": "failure", "jobs": [{ "name": "digest / gate", "conclusion": "success" }, { "name": "digest / digest", "conclusion": "success" }, { "name": "digest / notify", "conclusion": "failure" }], "deadline": 2 }
+      ]
+    },
+    {
+      "kanon": [
+        { "verb": "kanon.doctor" },
+        { "verb": "expect.doctor", "unchecked": ["secrets", "notify-secrets"], "findings": ["notify.failing"], "blocking": [] }
+      ],
+      "act": []
+    }
+  ]
+}
