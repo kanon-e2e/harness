@@ -24,6 +24,7 @@
       "act": [
         { "verb": "files.commit", "from": "scenario", "dir": "change", "branch": "docs-note", "message": "docs: add a note" },
         { "verb": "pr.open", "name": "note", "head": "docs-note", "title": "docs: add a note", "body": "A gate refusal: this pull request is labelled review:please by an App outside the App register, and the review lane must start nothing." },
+        { "verb": "expect.api", "path": "repos/{{repository}}/actions/workflows/agent-review.yml/runs?event=pull_request_target&branch=docs-note", "pointer": "/total_count", "equals": 1, "deadline": 5 },
         { "verb": "pr.label", "pr": "note", "add": ["review:please"] },
         { "verb": "expect.api", "path": "repos/{{repository}}/actions/workflows/agent-review.yml/runs?event=pull_request_target&branch=docs-note", "pointer": "/total_count", "equals": 2, "deadline": 5 },
         { "verb": "run.await", "name": "review-label", "workflow": "agent-review.yml", "event": "pull_request_target", "pr": "note", "deadline": 10 },
