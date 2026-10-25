@@ -30,6 +30,9 @@ import { VOCABULARY } from './vocabulary.mjs';
 export const MAX_PHASES = 3;
 export const SEGMENTS = /** @type {const} */ (['kanon', 'act']);
 
+/** The kinds of run `runsOn` names: a candidate's run (the poll, or a whole-catalogue dispatch for a candidate), any other dispatch, the nightly. */
+export const RUN_KINDS = /** @type {const} */ (['candidate', 'dispatch', 'scheduled']);
+
 /** scenario.json's fields (§4.1). */
 export const SCENARIO_FIELDS = Object.freeze({
   id: str({ required: true, pattern: /^[a-z0-9-]{1,40}$/, hint: 'lowercase, digits and hyphens, at most 40 characters' }),
@@ -43,7 +46,16 @@ export const SCENARIO_FIELDS = Object.freeze({
   // `head`, in a job of its own (`author-label`, docs/jobs.md), as an adopter's Implementer labels
   // its own pull request. Only a real-model scenario takes it.
   authorLabel: map(),
+  // Optional (#139): the kinds of run the scenario takes part in, `plan` keeping it out of every
+  // other kind. Left out, it is every kind. A `select=<id>` dispatch runs it whatever it says.
+  runsOn: strs({ nonEmpty: true, items: { enum: [...RUN_KINDS] } }),
 });
+
+/**
+ * Whether a scenario takes part in a kind of run: its `runsOn` names the kind, or it has none.
+ * @param {{ runsOn?: string[] }} s @param {typeof RUN_KINDS[number]} kind
+ */
+export const runsOn = (s, kind) => !Array.isArray(s.runsOn) || s.runsOn.includes(kind);
 
 /** A label the Author may apply. */
 export const AUTHOR_LABEL = /^[a-z0-9][a-z0-9:_.-]{0,49}$/;
@@ -68,6 +80,7 @@ export function validateScenarioJson(s, dirName) {
     if (!(Array.isArray(o.apps) && o.apps.includes('author'))) p.push('`authorLabel` has the Author apply the label, and `apps` doesn\'t list `author`');
     if (o.claude !== 'subscription') p.push('`authorLabel` is for a real-model scenario (`claude: subscription`): only a model lane needs an admitted identity to start it');
   }
+  if (o.gate === true && Array.isArray(o.runsOn) && !o.runsOn.includes('candidate')) p.push('`gate: true` gates a candidate, and `runsOn` leaves out `candidate`: the candidate\'s run would never hold the scenario');
   return p;
 }
 

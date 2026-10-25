@@ -2,7 +2,7 @@ import { spawnSync } from 'node:child_process';
 import { chmodSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { gate, phasesOf, repositoryName } from '../runner/gate.mjs';
+import { gate, labelsKept, phasesOf, repositoryName } from '../runner/gate.mjs';
 import { tempDir } from './helpers/stubs.mjs';
 import { readWorkflows } from './helpers/workflows.mjs';
 
@@ -63,6 +63,14 @@ describe('gate: the scenarios phase N runs', () => {
     expect(decide(2, {}, planned).scenarios).toEqual(planned);
   });
 
+  it('MUTATION: hands on the Author\'s labels only of the scenarios it kept, so `author-label` mints for no repository an earlier phase ended (#108)', () => {
+    const labels = [{ id: 'two', head: 'docs-note', label: 'review:please' }, { id: 'three', head: 'fix', label: 'review:please' }];
+    const d = decide(2, { three: { gone: true } });
+    expect(labelsKept(labels, d.scenarios)).toEqual([labels[0]]);
+    expect(labelsKept(labels, decide(2, { two: standing(TOPIC.infra), three: standing(TOPIC.fail) }).scenarios)).toEqual([]);
+    expect(labelsKept(labels, decide(2).scenarios)).toEqual(labels);
+  });
+
   it('reads the phases from the catalogue: the install scenarios have two, deploy-rehearsal three', () => {
     expect(phasesOf('install-review')).toBe(2);
     expect(phasesOf('deploy-rehearsal')).toBe(3);
@@ -97,7 +105,7 @@ process.stdout.write(JSON.stringify(r));
 `);
     chmodSync(join(dir, 'gh'), 0o755);
   };
-  const runGate = (phase, repos = {}) => {
+  const runGate = (phase, repos = {}, more = {}) => {
     const dir = tempDir();
     fakeGh(dir);
     const all = { 'install-review': standing(), 'install-build': standing(), 'deploy-rehearsal': standing(), ...repos };
@@ -108,7 +116,7 @@ process.stdout.write(JSON.stringify(r));
       env: {
         ...process.env, PATH: `${dir}:${process.env.PATH}`, REPOS_FILE: join(dir, 'repos.json'), GH_LOG: join(dir, 'log'), GH_TOKEN: 'x',
         PHASE: String(phase), GITHUB_OUTPUT: out, GITHUB_STEP_SUMMARY: join(dir, 'summary'),
-        GITHUB_RUN_ID: RUN.id, GITHUB_RUN_ATTEMPT: RUN.attempt, SCENARIOS: JSON.stringify(['install-review', 'install-build', 'deploy-rehearsal'].map(entry)),
+        GITHUB_RUN_ID: RUN.id, GITHUB_RUN_ATTEMPT: RUN.attempt, SCENARIOS: JSON.stringify(['install-review', 'install-build', 'deploy-rehearsal'].map(entry)), ...more,
       },
     });
     let calls = [];
@@ -140,6 +148,13 @@ process.stdout.write(JSON.stringify(r));
       expect(e2e.jobs[name].steps.find((s) => s.id === 'gate').env, name).toMatchObject({ GH_TOKEN: '${{ github.token }}' });
     }
     expect(readFileSync('runner/gate.mjs', 'utf8')).not.toMatch(/readResults|RESULTS_DIR/);
+  });
+
+  it('with AUTHOR_LABELS, as gate-2 runs it, also writes the labels of the scenarios it kept (#108)', () => {
+    const labels = [{ id: 'install-review', head: 'docs-note', label: 'review:please' }, { id: 'install-build', head: 'fix', label: 'review:please' }];
+    const { status, output } = runGate(2, { 'install-build': { gone: true } }, { AUTHOR_LABELS: JSON.stringify(labels) });
+    expect(status).toBe(0);
+    expect(output).toBe(`scenarios=${JSON.stringify(['install-review', 'deploy-rehearsal'].map(entry))}\nauthor-labels=${JSON.stringify([labels[0]])}\n`);
   });
 
   it('refuses a phase that has no gate: 1, or past three', () => {

@@ -6,7 +6,9 @@
 # neither. So the test Author, which the scenario's App register names, applies the label, as an
 # adopter's Implementer labels its own pull request. The same spine as the other pairs:
 #   • `mint` holds the Author's key and runs nothing else. It mints a token scoped to the one
-#     scenario repository with Issues and Pull requests write, and nothing more.
+#     scenario repository with Issues and Pull requests write, and nothing more. Either alone may
+#     be enough to label a pull request; until a live mint shows which, both stay, and
+#     docs/jobs.md names what a leak of them can do (#108).
 #   • `job` is `e2e-author-label-job.yml`, one job, handed the token and nothing else: `gh` applies
 #     the label, and the token is revoked. No checkout, no harness code, no Kanon code (K-AGENT-50).
 # THE PLAN CHANGES HERE (§5.2, §11): the test Apps' keys are read by `provision` and by this

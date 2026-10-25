@@ -40,7 +40,7 @@ const artifacts = (name, runs) => [{ total_count: runs.length, artifacts: runs.m
 const results = (id, costs) => [{ total_count: costs.length, artifacts: costs.map((_, i) => ({ name: `kanon-e2e-result-${id}`, workflow_run: { id: 500 + i, head_branch: 'main' }, expired: false, created_at: ago(60 * (i + 1)) })) }];
 
 /** The world `plan` reads, for a candidate `candidate-v0.42.0` on top of stable `v0.41.0`. */
-const world = ({ checks = [], candidateRuns = [], inFlight = [], nightlyRecord = null, main = MAIN, rels = releases('candidate-v0.42.0', 'v0.41.0'), history = [] } = {}) => ({
+const world = ({ checks = [], candidateRuns = [], inFlight = [], nightlyRecord = null, nightlyRun = 5, main = MAIN, rels = releases('candidate-v0.42.0', 'v0.41.0'), history = [] } = {}) => ({
   [`GET ${H}/actions/artifacts?name=kanon-e2e-result-review-real&per_page=100`]: results('review-real', history),
   [DOWNLOADS]: Object.fromEntries(history.map((cost, i) => [500 + i, { schema: 'kanon-e2e-result/v1', scenario: 'review-real', result: 'pass', costUsd: cost }])),
   [`GET ${K}/releases?per_page=100`]: rels,
@@ -51,7 +51,7 @@ const world = ({ checks = [], candidateRuns = [], inFlight = [], nightlyRecord =
   [`GET ${H}/actions/artifacts?name=e2e-candidate-candidate-v0.42.0&per_page=100`]: artifacts('e2e-candidate-candidate-v0.42.0', candidateRuns),
   [`GET ${H}/actions/workflows/e2e.yml/runs?status=in_progress&per_page=100`]: { workflow_runs: [{ id: 999 }, ...inFlight.map(([id]) => ({ id }))] },
   ...Object.fromEntries(inFlight.map(([id, marker]) => [`GET ${H}/actions/runs/${id}/artifacts?per_page=100`, { artifacts: marker ? [{ name: marker }] : [] }])),
-  [`GET ${H}/actions/artifacts?name=e2e-nightly-${main}&per_page=100`]: nightlyRecord ? [{ total_count: 1, artifacts: [{ name: `e2e-nightly-${main}`, workflow_run: { id: 5 }, created_at: nightlyRecord, expired: false }] }] : [{ total_count: 0, artifacts: [] }],
+  [`GET ${H}/actions/artifacts?name=e2e-nightly-${main}&per_page=100`]: nightlyRecord ? [{ total_count: 1, artifacts: [{ name: `e2e-nightly-${main}`, workflow_run: { id: nightlyRun }, created_at: nightlyRecord, expired: false }] }] : [{ total_count: 0, artifacts: [] }],
 });
 
 const DOWNLOADS = Symbol('downloads');
@@ -150,6 +150,14 @@ describe('the nightly (§7, decision 4)', () => {
     const out = await nightly(world({ nightlyRecord: ago(24 * 60) }));
     expect(out).toMatchObject({ go: false, scenarios: [], marker: '' });
     expect(out.reason).toMatch(/^held/);
+  });
+
+  // MUTATION (#134): a hold that reads the run's own marker stops "Re-run all jobs" of a nightly at `plan`.
+  it('MUTATION: a re-run of a nightly isn\'t held by its own first attempt\'s marker, the only one for the head (#134)', async () => {
+    const rerun = await nightly(world({ nightlyRecord: ago(30), nightlyRun: 999 }));
+    expect(rerun).toMatchObject({ go: true, trigger: 'nightly', marker: `e2e-nightly-${MAIN}` });
+    // Another run's marker for the head still holds it.
+    expect((await nightly(world({ nightlyRecord: ago(30), nightlyRun: 998 }))).reason).toMatch(/^held/);
   });
 
   it('the seven-day floor: a night runs when the last nightly ran more than seven days ago', async () => {
@@ -447,5 +455,88 @@ describe('the real-model ledger in `plan` (§6.2, E10)', () => {
     expect(held.g.calls.some((c) => /kanon-e2e-result-/.test(c.key))).toBe(false);
     const ran = await poll(world({ history: [0.5] }));
     expect(ran.g.calls.filter((c) => /kanon-e2e-result-/.test(c.key)).map((c) => c.key)).toEqual([`GET ${H}/actions/artifacts?name=kanon-e2e-result-review-real&per_page=100`]);
+  });
+});
+
+describe('`runsOn`: a scenario takes part only in the kinds of run it names (#139; the Owner, 2026-10-25)', () => {
+  const sc = (id, runsOn, over = {}) => ({ ...CATALOGUE[1], id, ...(runsOn ? { runsOn } : {}), ...over });
+  const ids = (out) => out.scenarios.map((s) => s.id);
+  const KINDS = [
+    sc('all', null), sc('cand', ['candidate']), sc('disp', ['dispatch']), sc('sched', ['scheduled']),
+    sc('cand-disp', ['candidate', 'dispatch']), sc('every', ['candidate', 'dispatch', 'scheduled']),
+  ];
+  const run = (input, routes = world()) => plan({ catalogue: KINDS, ...input }, routes);
+
+  it('MUTATION: the poll, a candidate\'s run, holds only the scenarios whose `runsOn` names `candidate`', async () => {
+    expect(ids(await run({ event: 'schedule', schedule: POLL }))).toEqual(['all', 'cand', 'cand-disp', 'every']);
+  });
+
+  it('MUTATION: the nightly holds only the scenarios whose `runsOn` names `scheduled`, whatever release it runs', async () => {
+    expect(ids(await run({ event: 'schedule', schedule: NIGHTLY }))).toEqual(['all', 'sched', 'every']);
+    expect(ids(await run({ event: 'schedule', schedule: NIGHTLY }, world({ rels: releases('v0.41.0') })))).toEqual(['all', 'sched', 'every']);
+  });
+
+  it('MUTATION: a dispatch of the whole catalogue at a stable release holds only the scenarios whose `runsOn` names `dispatch`', async () => {
+    const out = await run({ event: 'workflow_dispatch', release: 'v0.41.0' });
+    expect(out.trigger).toBe('dispatch');
+    expect(ids(out)).toEqual(['all', 'disp', 'cand-disp', 'every']);
+  });
+
+  it('a dispatch of the whole catalogue for a candidate is a candidate\'s run, and holds what the poll would: `runsOn` naming `candidate`', async () => {
+    const out = await run({ event: 'workflow_dispatch', release: 'candidate-v0.42.0' });
+    expect(out.trigger).toBe('candidate');
+    expect(ids(out)).toEqual(['all', 'cand', 'cand-disp', 'every']);
+  });
+
+  it('MUTATION: a family `select` skips a scenario whose `runsOn` leaves out `dispatch`', async () => {
+    expect(ids(await run({ event: 'workflow_dispatch', release: 'v0.41.0', select: 'install' }))).toEqual(['all', 'disp', 'cand-disp', 'every']);
+  });
+
+  it('MUTATION: a `select=<id>` dispatch always runs the scenario it names, whatever its `runsOn`', async () => {
+    for (const id of ['cand', 'sched', 'disp']) {
+      const out = await run({ event: 'workflow_dispatch', release: 'v0.41.0', select: id });
+      expect(out, id).toMatchObject({ go: true, trigger: 'dispatch' });
+      expect(ids(out), id).toEqual([id]);
+    }
+  });
+
+  it('a family whose every scenario leaves out `dispatch` fails `plan` by name, rather than run nothing', async () => {
+    const off = [sc('only-c', ['candidate'], { family: 'deploy' })];
+    await expect(plan({ event: 'workflow_dispatch', release: 'v0.41.0', select: 'deploy', catalogue: off }, world())).rejects.toThrow(/`deploy`'s scenarios each leave `dispatch` out of `runsOn`/);
+  });
+
+  it('a scheduled run with no scenario of its kind stops at `plan`, and says why', async () => {
+    const out = await plan({ event: 'schedule', schedule: NIGHTLY, catalogue: [sc('disp', ['dispatch'])] }, world());
+    expect(out).toMatchObject({ go: false, marker: '', reason: 'no scenario in scenarios/ runs on the nightly: each one\'s `runsOn` leaves out `scheduled`' });
+  });
+
+  it('MUTATION: a scenario its `runsOn` keeps out takes no rotation slot under the cap', async () => {
+    const CAP = maxScenarios();
+    const free = Array.from({ length: CAP }, (_, i) => sc(`f-${String(i).padStart(2, '0')}`, null));
+    const offNightly = Array.from({ length: 4 }, (_, i) => sc(`a-${i}`, ['dispatch']));
+    for (let day = 0; day < 5; day++) {
+      const out = await decide({ catalogue: [...offNightly, ...free], runId: '999', release: '', select: '', schedule: NIGHTLY, event: 'schedule' }, { gh: stubGh(world()).gh, now: () => NOW + day * 24 * 60 * 60_000 });
+      expect(ids(out), `day ${day}`).toEqual(free.map((s) => s.id));
+      expect(out.left, `day ${day}`).toEqual([]);
+      expect(out.reason, `day ${day}`).not.toMatch(/leaves out/);
+    }
+  });
+
+  it('leaving `runsOn` out is every kind of run: no existing scenario changes', async () => {
+    const { scenarioDirs, loadScenario } = await import('../runner/validate.mjs');
+    const catalogue = scenarioDirs().map((d) => loadScenario(d).scenario);
+    expect(catalogue.some((s) => 'runsOn' in s)).toBe(false);
+    const every = catalogue.map((s) => ({ ...s, runsOn: ['candidate', 'dispatch', 'scheduled'] }));
+    for (const input of [{ event: 'schedule', schedule: POLL }, { event: 'schedule', schedule: NIGHTLY }, { event: 'workflow_dispatch', release: 'v0.41.0' }, { event: 'workflow_dispatch', release: 'candidate-v0.42.0' }, { event: 'workflow_dispatch', release: 'v0.41.0', select: 'install' }]) {
+      const [a, b] = [await plan({ ...input, catalogue }, world()), await plan({ ...input, catalogue: every }, world())];
+      const { g: _a, ...left } = a;
+      const { g: _b, ...right } = b;
+      expect(left, JSON.stringify(input)).toEqual(right);
+    }
+  });
+
+  it('a dispatch-only scenario dispatched by id is in its run\'s marker, so `burn-in` counts its passes from dispatches', async () => {
+    const out = await run({ event: 'workflow_dispatch', release: 'v0.41.0', select: 'disp' });
+    expect(markerOf(out)).toMatchObject({ marker: 'e2e-dispatch-v0.41.0', trigger: 'dispatch', release: 'v0.41.0', scenarios: ['disp'] });
   });
 });

@@ -3,8 +3,9 @@
 # CALLED ONLY BY `e2e-author-label-run.yml`. One job, three steps and nothing else: receive the
 # Author's token, apply the label to the scenario repository's open pull request from `head`,
 # revoke the token. No checkout, no harness code, no Kanon code: nothing runs beside the token
-# but `gh`. A scenario that ended in phase 1 left its repository archived (`fail`) or with no such
-# pull request, and the job labels nothing and says so; the scenario's result is already set.
+# but `gh`. `e2e.yml` runs it only for a scenario `gate-2` kept, so not for one phase 1 ended
+# (#108). Should one end between the gate and here, its repository is archived (`fail`) or has no
+# such pull request, and the job labels nothing and says so; the scenario's result is already set.
 name: e2e — the Author's label
 
 on:

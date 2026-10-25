@@ -15,8 +15,13 @@
 // fails its job, as before; so does one whose repository the gate couldn't read, whose own `act`
 // job reads it again.
 //
-//   node runner/gate.mjs   (reads PHASE, SCENARIOS, GH_TOKEN, GITHUB_RUN_ID, GITHUB_RUN_ATTEMPT;
-//                           writes `scenarios=<JSON>` to GITHUB_OUTPUT, and exits 0 whatever it drops)
+// `gate-2` also hands on `plan`'s `author-labels` (#108), only those of the scenarios it kept, for
+// the `author-label` job's matrix after it: the Author's token is then minted for no repository
+// that phase 1 ended, as no phase-N mint is.
+//
+//   node runner/gate.mjs   (reads PHASE, SCENARIOS, AUTHOR_LABELS when set, GH_TOKEN, GITHUB_RUN_ID,
+//                           GITHUB_RUN_ATTEMPT; writes `scenarios=<JSON>`, and with AUTHOR_LABELS
+//                           `author-labels=<JSON>`, to GITHUB_OUTPUT, and exits 0 whatever it drops)
 
 import { appendFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -68,6 +73,12 @@ export function gate({ phase, planned, repositories, phasesOf: count }) {
 }
 
 /**
+ * The Author's labels of the scenarios the gate kept, in `plan`'s order (#108).
+ * @param {Array<{ id: string }>} labels @param {Array<{ id: string }>} kept
+ */
+export const labelsKept = (labels, kept) => labels.filter((l) => kept.some((s) => s.id === l.id));
+
+/**
  * Reads each planned scenario's repository that has a phase `phase`, with the workflow's token:
  * every one is public.
  * @param {{ phase: number, planned: any[], run: { id: string, attempt: string }, phasesOf: (id: string) => number }} a
@@ -100,7 +111,9 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   for (const x of d.dropped) console.log(`${x.id}: no phase ${phase}, ${x.why}.`);
   for (const x of d.unread) console.log(`::warning title=gate-${phase}::${x.id} runs phase ${phase}, but its repository couldn't be read (${x.why}); its own \`act\` job reads it again.`);
   console.log(`Phase ${phase} runs ${d.scenarios.length ? d.scenarios.map((s) => s.id).join(', ') : 'no scenario'}.`);
-  if (env.GITHUB_OUTPUT) appendFileSync(env.GITHUB_OUTPUT, `scenarios=${JSON.stringify(d.scenarios)}\n`);
+  const labels = env.AUTHOR_LABELS === undefined ? null : labelsKept(JSON.parse(env.AUTHOR_LABELS || '[]'), d.scenarios);
+  if (labels) console.log(`The Author labels ${labels.length ? labels.map((l) => l.id).join(', ') : 'no scenario'}.`);
+  if (env.GITHUB_OUTPUT) appendFileSync(env.GITHUB_OUTPUT, `scenarios=${JSON.stringify(d.scenarios)}\n${labels ? `author-labels=${JSON.stringify(labels)}\n` : ''}`);
   if (env.GITHUB_STEP_SUMMARY) {
     appendFileSync(env.GITHUB_STEP_SUMMARY, [
       `## gate-${phase}`,

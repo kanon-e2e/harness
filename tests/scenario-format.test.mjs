@@ -89,6 +89,36 @@ describe('scenario.json, field by field (§4.1)', () => {
   });
 });
 
+describe('scenario.json\'s `runsOn`: the kinds of run a scenario takes part in (#139)', () => {
+  it('takes any non-empty set of `candidate`, `dispatch` and `scheduled`, and leaving it out is every kind', () => {
+    for (const runsOn of [['candidate'], ['dispatch'], ['scheduled'], ['candidate', 'dispatch'], ['candidate', 'dispatch', 'scheduled']]) {
+      expect(validateScenarioJson(scenarioJson('sample', { runsOn }), 'sample'), runsOn.join()).toEqual([]);
+    }
+    expect(validateScenarioJson(scenarioJson('sample'), 'sample')).toEqual([]);
+  });
+
+  it.each([
+    ['an empty list', [], /`runsOn` must be a non-empty list of strings/],
+    ['an unknown kind', ['nightly'], /each of `runsOn` must be one of `candidate`, `dispatch`, `scheduled`, not `nightly`/],
+    ['a kind twice', ['dispatch', 'dispatch'], /`runsOn` names something twice/],
+    ['a string, not a list', 'dispatch', /`runsOn` must be a non-empty list of strings/],
+  ])('refuses %s', (_, runsOn, error) => {
+    const errors = validateScenarioJson(scenarioJson('sample', { runsOn }), 'sample');
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatch(error);
+  });
+
+  it('refuses `gate: true` with a `runsOn` that leaves out `candidate`: a gating scenario must be in the candidate\'s run it gates', () => {
+    for (const runsOn of [['dispatch'], ['scheduled'], ['dispatch', 'scheduled']]) {
+      expect(validateScenarioJson(scenarioJson('sample', { gate: true, runsOn }), 'sample'), runsOn.join()).toEqual([
+        '`gate: true` gates a candidate, and `runsOn` leaves out `candidate`: the candidate\'s run would never hold the scenario',
+      ]);
+    }
+    expect(validateScenarioJson(scenarioJson('sample', { gate: true, runsOn: ['candidate'] }), 'sample')).toEqual([]);
+    expect(validateScenarioJson(scenarioJson('sample', { gate: false, runsOn: ['dispatch'] }), 'sample')).toEqual([]);
+  });
+});
+
 describe('start/: copied as it is, with two substitutions and no others (§4.1)', () => {
   const start = (files) => validateStart(writeTree(tempDir(), files));
 
