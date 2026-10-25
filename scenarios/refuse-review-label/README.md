@@ -29,6 +29,7 @@ Phase 1 is [`install-review`](../install-review/README.md)'s phase 1, step for s
 | 1 | `kanon`, `act` | `install-review`'s phase 1 | What `install-review` expects. |
 | 2 | `act` | `files.commit` of `change/` on the branch `docs-note` | |
 | 2 | `act` | `pr.open` from `docs-note`, as the driver | |
+| 2 | `act` | `expect.api` on the review caller's `pull_request_target` runs for the branch `docs-note` | `/total_count` is 1: the run for the pull request's `opened` event exists. It waits up to 5 minutes, so the label comes after that run is queued. |
 | 2 | `act` | **The refusal:** `pr.label` adds `review:please`, as the driver | |
 | 2 | `act` | `expect.api` on the review caller's `pull_request_target` runs for the branch `docs-note` | `/total_count` is 2: the run for the pull request's `opened` event and the run for the label. It waits until both exist, so the next step can't keep the `opened` run. |
 | 2 | `act` | `run.await` for `agent-review.yml`'s `pull_request_target` run on the pull request's head | The newest such run, the label's, completes. |
@@ -37,7 +38,9 @@ Phase 1 is [`install-review`](../install-review/README.md)'s phase 1, step for s
 
 **Why `review / review` skipped proves the refusal.** On a member's `review:please`, the filter's later steps read the Reviewer's login and decide `review=true`, and `review / review` runs: it mints the Judge's token and starts the agent. This repository has no `CLAUDE_CODE_OAUTH_TOKEN`, so the run would then fail. A `skipped` review job beside a `success` filter is the gate's refusal, and nothing else ends a label event that way.
 
-**Why the count comes first.** Both events land on the same head, and `run.await` keeps the newest run. Right after the label, GitHub may not have created the label's run yet, and `run.await` would keep the `opened` run, already complete. The count makes it wait until the label's run exists. The `opened` run is a different refusal: the driver's pull request is a bot's, and the filter's `if` declines it before the gate.
+**Why the label waits for the `opened` run.** `agent-review.yml` puts a pull request's `opened` and `labeled` events into one concurrency group with `cancel-in-progress`. It counts on the label arriving later, so the label's run supersedes the `opened` run. Without the wait, `pr.open` and `pr.label` fire their events within a second, and GitHub can queue them in either order. When it queues `opened` second, the `opened` run cancels the label's run. The run that survives is the `opened` run, whose `review / filter` the filter's `if` skips, and `expect.run` fails on a race, not on Kanon (harness #99). Waiting for the `opened` run to exist before the label fixes the order. The label's run is created later, so it gets the higher run number, and it cancels the `opened` run if that run hasn't finished.
+
+**Why the count comes before `run.await`.** Both events land on the same head, and `run.await` keeps the newest run, the one with the highest run number. Right after the label, GitHub may not have created the label's run yet, and `run.await` would keep the `opened` run, already complete. The count makes it wait until the label's run exists. The `opened` run is a different refusal: the driver's pull request is a bot's, and the filter's `if` declines it before the gate.
 
 **What it doesn't hold.** CI's completion on the pull request also starts the review lane (`workflow_run`), and its gate judges whoever applied the review label, the driver again. That run's record carries no field that ties it to this pull request, so the scenario doesn't wait for it.
 
@@ -46,7 +49,7 @@ Phase 1 is [`install-review`](../install-review/README.md)'s phase 1, step for s
 One public repository in `kanon-e2e`, `e2e-refuse-review-label-<run>-<attempt>`, holding what `install-review`'s holds, plus:
 
 - the branch `docs-note` and its open pull request, labelled `review:please`;
-- the review lane's runs on that pull request, each refused or declined, and `ci.yml`'s run on it.
+- the review lane's runs on that pull request, each refused, declined or cancelled, and `ci.yml`'s run on it.
 
 The repository is deleted when the scenario passes. When it fails, it is archived for 24 hours, with the `kanon-e2e-failed` topic.
 
@@ -65,5 +68,6 @@ The failing job's summary names the first failure. A failure in phase 1 is an in
 - **`expect.run` on `review / filter` `skipped`.** The filter's `if` declined the label before the gate ran: Kanon changed which labels start a review.
 - **`expect.run` on `review / filter` `failure`.** The gate failed by name instead of refusing: it couldn't read the register from the default branch, or an API call failed. Its step summary says which.
 - **`expect.run` on a job not in the run.** Kanon renamed a job of the review lane, or the caller's job is no longer `review`.
-- **`expect.api` on `/total_count`.** A third run reached the branch, or one of the two never started. GitHub starts no run for an event made with a workflow token, but the act token is an App's, so both events should start one.
+- **`expect.api` on `/total_count` equal to 1, before the label.** No run started for the `opened` event within 5 minutes: the caller lost that trigger. Or a second run reached the branch before the label was applied.
+- **`expect.api` on `/total_count` equal to 2, after the label.** A third run reached the branch, or one of the two never started. GitHub starts no run for an event made with a workflow token, but the act token is an App's, so both events should start one.
 - **`run.await` passed its deadline.** No run of `agent-review.yml` on `pull_request_target` reached the pull request's head: the caller lost that trigger, or the label never landed.

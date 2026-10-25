@@ -103,10 +103,18 @@ describe('refuse-review-label: a label applied by an identity outside the regist
     expect(files(join(s.dir, 'change'))).toEqual(['docs/note.md']);
   });
 
+  it('labels only once the opened event\'s run exists, so the label\'s run queues after it and supersedes it (#99)', () => {
+    const verbs = phase2.act.map((x) => x.verb);
+    expect(verbs.indexOf('pr.label')).toBe(verbs.indexOf('pr.open') + 2);
+    const [opened] = s.ofVerb('expect.api');
+    expect(opened).toMatchObject({ phase: 2, path: 'repos/{{repository}}/actions/workflows/agent-review.yml/runs?event=pull_request_target&branch=docs-note', pointer: '/total_count', equals: 1 });
+    expect(phase2.act[verbs.indexOf('pr.open') + 1]).toMatchObject({ verb: 'expect.api', equals: 1 });
+  });
+
   it('waits until both runs exist, the opened event\'s and the label\'s, before it keeps the newest', () => {
     const verbs = phase2.act.map((x) => x.verb);
-    expect(verbs).toEqual(['files.commit', 'pr.open', 'pr.label', 'expect.api', 'run.await', 'expect.run', 'expect.pr']);
-    const [count] = s.ofVerb('expect.api');
+    expect(verbs).toEqual(['files.commit', 'pr.open', 'expect.api', 'pr.label', 'expect.api', 'run.await', 'expect.run', 'expect.pr']);
+    const [, count] = s.ofVerb('expect.api');
     expect(count).toMatchObject({ path: 'repos/{{repository}}/actions/workflows/agent-review.yml/runs?event=pull_request_target&branch=docs-note', pointer: '/total_count', equals: 2 });
     const [awaited] = phase2.act.filter((x) => x.verb === 'run.await');
     expect(awaited).toMatchObject({ name: 'review-label', workflow: 'agent-review.yml', event: 'pull_request_target', pr: 'note' });
@@ -248,25 +256,33 @@ describe('E12\'s mutation: a copy of a scenario whose expectation is wrong reads
     });
 
     it('keeps the label\'s run, never the opened event\'s, once the count says both exist', async () => {
-      const [count] = s.ofVerb('expect.api');
+      const [first, count] = s.ofVerb('expect.api');
       const awaited = s.phases[1].act.find((x) => x.verb === 'run.await');
-      const opened = { id: 41, run_number: 1, status: 'completed', conclusion: 'skipped' };
+      // The label's run queued after the opened run, so it supersedes it: the opened run is cancelled.
+      const opened = { id: 41, run_number: 1, status: 'completed', conclusion: 'cancelled' };
       const labelled = { id: 42, run_number: 2, status: 'in_progress' };
       const listing = `GET repos/${REPO}/actions/workflows/agent-review.yml/runs?event=pull_request_target&branch=docs-note`;
       const byHead = `GET repos/${REPO}/actions/workflows/agent-review.yml/runs?event=pull_request_target&head_sha=abc&per_page=20`;
       const g = stubGh({
-        [listing]: inTurn({ total_count: 1, workflow_runs: [opened] }, { total_count: 2, workflow_runs: [labelled, opened] }),
+        [listing]: inTurn({ total_count: 0, workflow_runs: [] }, { total_count: 1, workflow_runs: [opened] }, { total_count: 1, workflow_runs: [opened] }, { total_count: 2, workflow_runs: [labelled, opened] }),
         [`GET repos/${REPO}/pulls/4`]: { head: { sha: 'abc' } },
         [byHead]: inTurn({ workflow_runs: [opened, labelled] }, { workflow_runs: [opened, { ...labelled, status: 'completed', conclusion: 'success' }] }),
       });
       const ctx = context({ gh: g.gh, state: { prs: { note: 4 } } });
+      await VOCABULARY['expect.api'].run(bare(first), ctx);
       await VOCABULARY['expect.api'].run(bare(count), ctx);
       await VOCABULARY['run.await'].run(bare(awaited), ctx);
       expect(ctx.state.runs['review-label']).toBe(42);
     });
 
+    it('fails the first wait while the opened event\'s run doesn\'t exist yet', async () => {
+      const [first] = s.ofVerb('expect.api');
+      const g = stubGh({ [`GET repos/${REPO}/actions/workflows/agent-review.yml/runs?event=pull_request_target&branch=docs-note`]: { total_count: 0, workflow_runs: [] } });
+      await expect(VOCABULARY['expect.api'].run(bare(first), context({ gh: g.gh }))).rejects.toMatchObject(fails);
+    });
+
     it('fails the count while only the opened event\'s run exists', async () => {
-      const [count] = s.ofVerb('expect.api');
+      const [, count] = s.ofVerb('expect.api');
       const g = stubGh({ [`GET repos/${REPO}/actions/workflows/agent-review.yml/runs?event=pull_request_target&branch=docs-note`]: { total_count: 1, workflow_runs: [] } });
       await expect(VOCABULARY['expect.api'].run(bare(count), context({ gh: g.gh }))).rejects.toMatchObject(fails);
     });
