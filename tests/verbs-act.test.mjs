@@ -374,6 +374,42 @@ describe('pr.merge', () => {
     expect(ctx.clock.sleeps).toEqual([2000]);
   });
 
+  // The queue read decides the path (#76): a read that fails, or answers without the queue's
+  // state, fails the step, and never falls back to `--squash`, which a queued repository refuses
+  // with GitHub's reason, hiding the cause (#73). `pr merge` is routed to succeed, so a fallback
+  // would pass.
+  describe('a merge-queue read that fails or answers malformed fails the step, and squashes nothing (#76)', () => {
+    const merging = (read) => stubGh({
+      'POST graphql': read,
+      [`pr merge 5 -R ${REPO} --squash --auto`]: undefined,
+      [`pr merge 5 -R ${REPO} --squash`]: undefined,
+      ...pulls({ state: 'closed', merged: true }),
+    });
+    const merges = (g) => g.calls.filter((c) => c.key.startsWith('pr merge'));
+
+    it('a read `gh` exits non-zero on fails the step with that error', async () => {
+      const g = merging(fail('GraphQL: Something went wrong while executing your query. (HTTP 502)'));
+      await expect(run('pr.merge', { pr: 'docs', via: 'front-door', deadline: 5 }, context({ gh: g.gh, state: { prs: { docs: 5 } } }))).rejects.toThrow(/gh api POST graphql exited 1: GraphQL: Something went wrong/);
+      expect(merges(g)).toEqual([]);
+    });
+
+    it('a read with no pull request in it fails the step naming the missing merge-queue state', async () => {
+      const g = merging({ data: { repository: { pullRequest: null } } });
+      await expect(run('pr.merge', { pr: 'docs', via: 'front-door', deadline: 5 }, context({ gh: g.gh, state: { prs: { docs: 5 } } }))).rejects.toThrow(/no merge-queue state for pull request #5/);
+      expect(merges(g)).toEqual([]);
+    });
+
+    it('a read missing one queue field, or giving it the wrong type, fails the step too', async () => {
+      const { isMergeQueueEnabled, ...noEnabled } = queueState().data.repository.pullRequest;
+      expect(isMergeQueueEnabled).toBe(false);
+      for (const pr of [noEnabled, { ...noEnabled, isMergeQueueEnabled: 'false' }, { ...queueState().data.repository.pullRequest, isInMergeQueue: null }, { ...queueState().data.repository.pullRequest, timelineItems: {} }]) {
+        const g = merging({ data: { repository: { pullRequest: pr } } });
+        await expect(run('pr.merge', { pr: 'docs', via: 'front-door', deadline: 5 }, context({ gh: g.gh, state: { prs: { docs: 5 } } })), JSON.stringify(pr)).rejects.toThrow(/no merge-queue state for pull request #5/);
+        expect(merges(g)).toEqual([]);
+      }
+    });
+  });
+
   it('keeps polling when the queue\'s removal is its merge, which GitHub records as `merged`', async () => {
     const g = stubGh({
       ...graphql(queueState({ enabled: true }), queueState({ enabled: true, removals: [['2026-10-19T10:00:00Z', 'merged']] })),
