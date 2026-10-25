@@ -249,7 +249,9 @@ export async function decide(input, deps) {
   const main = await sha('main');
   const marker = `e2e-nightly-${main}`;
   const floor = SETTINGS.nightlyFloorDays * 24 * 60 * 60_000;
-  const last = (await recorded(marker)).filter((x) => !x.expired && deps.now() - Date.parse(x.created_at) <= floor);
+  // This run's own marker isn't a last nightly: a re-run keeps its run's id, and finds the marker
+  // its first attempt recorded for the same head (#134), as the six-run count reads runs by id.
+  const last = (await recorded(marker)).filter((x) => String(x.workflow_run?.id) !== String(input.runId) && !x.expired && deps.now() - Date.parse(x.created_at) <= floor);
   if (last.length) return stop(trigger, `held: Kanon's main is still ${main.slice(0, 12)}, which the nightly ran at ${last[0].created_at}`);
   const release = fresh ?? stable;
   if (!release) return stop(trigger, 'no release of Kanon to run');

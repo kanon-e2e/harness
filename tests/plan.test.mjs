@@ -40,7 +40,7 @@ const artifacts = (name, runs) => [{ total_count: runs.length, artifacts: runs.m
 const results = (id, costs) => [{ total_count: costs.length, artifacts: costs.map((_, i) => ({ name: `kanon-e2e-result-${id}`, workflow_run: { id: 500 + i, head_branch: 'main' }, expired: false, created_at: ago(60 * (i + 1)) })) }];
 
 /** The world `plan` reads, for a candidate `candidate-v0.42.0` on top of stable `v0.41.0`. */
-const world = ({ checks = [], candidateRuns = [], inFlight = [], nightlyRecord = null, main = MAIN, rels = releases('candidate-v0.42.0', 'v0.41.0'), history = [] } = {}) => ({
+const world = ({ checks = [], candidateRuns = [], inFlight = [], nightlyRecord = null, nightlyRun = 5, main = MAIN, rels = releases('candidate-v0.42.0', 'v0.41.0'), history = [] } = {}) => ({
   [`GET ${H}/actions/artifacts?name=kanon-e2e-result-review-real&per_page=100`]: results('review-real', history),
   [DOWNLOADS]: Object.fromEntries(history.map((cost, i) => [500 + i, { schema: 'kanon-e2e-result/v1', scenario: 'review-real', result: 'pass', costUsd: cost }])),
   [`GET ${K}/releases?per_page=100`]: rels,
@@ -51,7 +51,7 @@ const world = ({ checks = [], candidateRuns = [], inFlight = [], nightlyRecord =
   [`GET ${H}/actions/artifacts?name=e2e-candidate-candidate-v0.42.0&per_page=100`]: artifacts('e2e-candidate-candidate-v0.42.0', candidateRuns),
   [`GET ${H}/actions/workflows/e2e.yml/runs?status=in_progress&per_page=100`]: { workflow_runs: [{ id: 999 }, ...inFlight.map(([id]) => ({ id }))] },
   ...Object.fromEntries(inFlight.map(([id, marker]) => [`GET ${H}/actions/runs/${id}/artifacts?per_page=100`, { artifacts: marker ? [{ name: marker }] : [] }])),
-  [`GET ${H}/actions/artifacts?name=e2e-nightly-${main}&per_page=100`]: nightlyRecord ? [{ total_count: 1, artifacts: [{ name: `e2e-nightly-${main}`, workflow_run: { id: 5 }, created_at: nightlyRecord, expired: false }] }] : [{ total_count: 0, artifacts: [] }],
+  [`GET ${H}/actions/artifacts?name=e2e-nightly-${main}&per_page=100`]: nightlyRecord ? [{ total_count: 1, artifacts: [{ name: `e2e-nightly-${main}`, workflow_run: { id: nightlyRun }, created_at: nightlyRecord, expired: false }] }] : [{ total_count: 0, artifacts: [] }],
 });
 
 const DOWNLOADS = Symbol('downloads');
@@ -150,6 +150,14 @@ describe('the nightly (§7, decision 4)', () => {
     const out = await nightly(world({ nightlyRecord: ago(24 * 60) }));
     expect(out).toMatchObject({ go: false, scenarios: [], marker: '' });
     expect(out.reason).toMatch(/^held/);
+  });
+
+  // MUTATION (#134): a hold that reads the run's own marker stops "Re-run all jobs" of a nightly at `plan`.
+  it('MUTATION: a re-run of a nightly isn\'t held by its own first attempt\'s marker, the only one for the head (#134)', async () => {
+    const rerun = await nightly(world({ nightlyRecord: ago(30), nightlyRun: 999 }));
+    expect(rerun).toMatchObject({ go: true, trigger: 'nightly', marker: `e2e-nightly-${MAIN}` });
+    // Another run's marker for the head still holds it.
+    expect((await nightly(world({ nightlyRecord: ago(30), nightlyRun: 998 }))).reason).toMatch(/^held/);
   });
 
   it('the seven-day floor: a night runs when the last nightly ran more than seven days ago', async () => {
