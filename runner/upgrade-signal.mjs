@@ -30,7 +30,7 @@
 import { appendFileSync, readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
-import { api } from './lib/gh.mjs';
+import { api, foundAs } from './lib/gh.mjs';
 import { ghProcess } from './lib/proc.mjs';
 import { retrying } from './lib/retry.mjs';
 import { SETTINGS } from './sizing.mjs';
@@ -203,9 +203,10 @@ export const issueBody = (d, run, now) => [
  */
 export async function signal(d, { gh, run, now }) {
   const ctx = { gh, repository: H };
-  const open = (await api(ctx, `repos/${H}/issues?state=open&per_page=100`, { paginate: true }) ?? [])
+  const marked = async () => (await api(ctx, `repos/${H}/issues?state=open&per_page=100`, { paginate: true }) ?? [])
     .filter((/** @type {any} */ i) => i?.user?.login === BOT && !i.pull_request && hasMarker(i.body))
     .sort((/** @type {any} */ a, /** @type {any} */ b) => a.number - b.number);
+  const open = await marked();
   const [kept, ...extra] = open;
   const duplicates = [];
   for (const dup of extra) {
@@ -216,7 +217,8 @@ export async function signal(d, { gh, run, now }) {
     const body = issueBody(d, run, now);
     const issue = kept
       ? await api(ctx, `repos/${H}/issues/${kept.number}`, { method: 'PATCH', body: { title: SIGNAL_TITLE, body } })
-      : await api(ctx, `repos/${H}/issues`, { method: 'POST', body: { title: SIGNAL_TITLE, body } });
+      // A POST GitHub failed is asked again only when no issue of the title and marker is open (#130).
+      : await api(ctx, `repos/${H}/issues`, { method: 'POST', body: { title: SIGNAL_TITLE, body }, landed: async () => foundAs((await marked()).find((/** @type {any} */ i) => i.title === SIGNAL_TITLE)) });
     return { action: kept ? 'updated' : 'opened', issue: issue?.html_url ?? kept?.html_url ?? null, duplicates };
   }
   if (!kept) return { action: 'none', issue: null, duplicates };

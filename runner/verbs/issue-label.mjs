@@ -1,7 +1,7 @@
 // `issue.label` (Kanon plan 0012 §4.2): adds labels to an issue.
 
 import { NAME, str, strs } from '../lib/args.mjs';
-import { api, repoPath } from '../lib/gh.mjs';
+import { api, foundAs, labelsOn, repoPath } from '../lib/gh.mjs';
 import { named } from '../lib/state.mjs';
 
 export default {
@@ -14,6 +14,8 @@ export default {
   },
   /** @param {any} step @param {any} ctx */
   async run(step, ctx) {
-    await api(ctx, repoPath(ctx, `issues/${named(ctx, 'issues', step.issue)}/labels`), { method: 'POST', body: { labels: step.add } });
+    const n = named(ctx, 'issues', step.issue);
+    const landed = async () => { const on = await labelsOn(ctx, n); return foundAs(step.add.every((/** @type {string} */ l) => on.includes(l)) && on); };
+    await api(ctx, repoPath(ctx, `issues/${n}/labels`), { method: 'POST', body: { labels: step.add }, landed });
   },
 };

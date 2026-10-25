@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest';
 import {
   ALLOWED_UNCHECKED, decide, GRACE_DAYS, judgeCurrent, judgeDoctor, judgeRelease, MARKER, read, SIGNAL_TITLE, signal, stableReleases,
 } from '../runner/upgrade-signal.mjs';
-import { stubGh } from './helpers/stubs.mjs';
+import { retrying } from '../runner/lib/retry.mjs';
+import { fail, stubGh } from './helpers/stubs.mjs';
 import { readWorkflows, workflowText } from './helpers/workflows.mjs';
 
 /**
@@ -290,5 +291,30 @@ describe('`upgrade-signal.yml`', () => {
   it('pins every action to a commit', () => {
     const unpinned = Object.values(w.jobs).flatMap((j) => j.steps.filter((s) => s.uses && !/^[\w.-]+\/[\w.-]+@[0-9a-f]{40}$/.test(s.uses)).map((s) => s.uses));
     expect(unpinned).toEqual([]);
+  });
+});
+
+describe('the issue\'s POST GitHub committed before its 502 is looked up, not asked again (#130)', () => {
+  it('finds the issue by its title and marker, and opens no second', async () => {
+    const d = decide({ doctor: doctorDoc(pinned('v0.40.2')), releases: releases(8), releaseRun: green, now: NOW });
+    let posted = 0;
+    const g = stubGh({
+      [LIST]: () => (posted ? [[{ ...marked(42), title: SIGNAL_TITLE }]] : [[]]),
+      [`POST repos/${H}/issues`]: () => { posted++; return posted === 1 ? fail('gh: HTTP 502: Bad Gateway') : { number: 43, html_url: 'x' }; },
+    });
+    const out = await signal(d, { gh: retrying(g.gh, { sleep: async () => {} }), run: RUN, now: NOW });
+    expect(out).toMatchObject({ action: 'opened', issue: `https://github.com/${H}/issues/42` });
+    expect(posted).toBe(1);
+  });
+
+  it('a marked issue of another title is not the POST\'s: asked again', async () => {
+    const d = decide({ doctor: doctorDoc(pinned('v0.40.2')), releases: releases(8), releaseRun: green, now: NOW });
+    let posted = 0;
+    const g = stubGh({
+      [LIST]: () => (posted ? [[{ ...marked(42), title: 'Something else' }]] : [[]]),
+      [`POST repos/${H}/issues`]: () => { posted++; return posted === 1 ? fail('gh: HTTP 502: Bad Gateway') : { number: 43, html_url: `https://github.com/${H}/issues/43` }; },
+    });
+    expect(await signal(d, { gh: retrying(g.gh, { sleep: async () => {} }), run: RUN, now: NOW })).toMatchObject({ issue: `https://github.com/${H}/issues/43` });
+    expect(posted).toBe(2);
   });
 });

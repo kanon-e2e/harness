@@ -12,7 +12,7 @@
 import { appendFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
-import { GhError, api } from '../runner/lib/gh.mjs';
+import { GhError, api, goneFrom } from '../runner/lib/gh.mjs';
 import { ghProcess } from '../runner/lib/proc.mjs';
 import { retrying } from '../runner/lib/retry.mjs';
 import { hours, janitorCutoffs, SETTINGS } from '../runner/sizing.mjs';
@@ -48,7 +48,9 @@ export async function sweep({ now }, deps) {
       continue;
     }
     try {
-      await api(ctx, `repos/${SETTINGS.organisation}/${r.name}`, { method: 'DELETE' });
+      // A DELETE GitHub failed is asked again only when the repository is still there (#130).
+      const path = `repos/${SETTINGS.organisation}/${r.name}`;
+      await api(ctx, path, { method: 'DELETE', landed: goneFrom(ctx, path) });
       deleted.push({ name: r.name, ageMinutes, failed: isFailed });
     } catch (e) {
       if (e instanceof GhError && /\bHTTP 404\b/.test(String(e.stderr))) continue;

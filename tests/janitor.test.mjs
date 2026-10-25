@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { CUTOFFS, sweep, summary } from '../janitor/janitor.mjs';
 import { janitorCutoffs, longestRunningMinutes, maxScenarios, SETTINGS } from '../runner/sizing.mjs';
+import { retrying } from '../runner/lib/retry.mjs';
 import { fail, stubGh } from './helpers/stubs.mjs';
 
 /**
@@ -70,5 +71,20 @@ describe('the janitor deletes only topic-marked repositories past their age', ()
     const text = summary(sweep);
     expect(text).toMatch(/Deleted[\s\S]*e2e-old-1-1/);
     expect(text).toMatch(/Left[\s\S]*e2e-young-2-1/);
+  });
+});
+
+describe('a DELETE GitHub carried out before its 502 is looked up, not asked again (#130)', () => {
+  it('reads the repository gone, and counts it deleted', async () => {
+    let gone = false;
+    const old = repo('e2e-old-1-1', CUTOFFS.cutoffMinutes / 60 + 1);
+    const g = stubGh({
+      [LIST]: [[old]],
+      [`DELETE repos/${old.full_name}`]: () => { gone = true; return fail('gh: HTTP 502: Bad Gateway'); },
+      [`GET repos/${old.full_name}`]: () => (gone ? fail('gh: Not Found (HTTP 404)') : old),
+    });
+    const out = await sweep({ now: NOW }, { gh: retrying(g.gh, { sleep: async () => {} }) });
+    expect(out.deleted.map((d) => d.name)).toEqual(['e2e-old-1-1']);
+    expect(g.writes()).toHaveLength(1);
   });
 });

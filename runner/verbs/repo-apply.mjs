@@ -21,10 +21,13 @@
 // (K-ADOPT-4). A step with `firstCommit`, which follows that push, applies what that run would
 // name: `ruleset.create`, then `ruleset.require-check` (#55). Without it, `ruleset.first-commit`
 // applies nothing, as before.
+//
+// A POST GitHub failed is asked again only when what it creates isn't there: the label, the
+// milestone, the ruleset by its name (#130).
 
 import { BUCKETS, CHECK_RULE, LANE_CHECK, MERGE_SETTINGS, RULESET_NAME, findRuleset as ruleset, isLabelTemplate, rulesetBody } from '../lib/adopt.mjs';
 import { bool } from '../lib/args.mjs';
-import { api, repoPath } from '../lib/gh.mjs';
+import { api, foundAs, notFound, repoPath } from '../lib/gh.mjs';
 import { kept } from '../lib/state.mjs';
 
 /** The findings each call applies, in K-ADOPT-1's order. */
@@ -43,15 +46,23 @@ const APPLY = {
     const file = await api(ctx, `repos/yedeya-labs/kanon/contents/requirements.json?ref=${k.release}`);
     const wanted = JSON.parse(Buffer.from(file.content, file.encoding).toString('utf8')).labels.filter((/** @type {string} */ l) => !isLabelTemplate(l));
     const have = new Set((await api(ctx, repoPath(ctx, 'labels?per_page=100'), { paginate: true })).map((/** @type {any} */ l) => l.name));
-    for (const name of wanted) if (!have.has(name)) await api(ctx, repoPath(ctx, 'labels'), { method: 'POST', body: { name } });
+    for (const name of wanted) {
+      if (have.has(name)) continue;
+      const landed = () => api(ctx, repoPath(ctx, `labels/${encodeURIComponent(name)}`)).then(foundAs, (e) => { if (notFound(e)) return null; throw e; });
+      await api(ctx, repoPath(ctx, 'labels'), { method: 'POST', body: { name }, landed });
+    }
   },
   'milestone.buckets': async (ctx) => {
     const have = new Set((await api(ctx, repoPath(ctx, 'milestones?state=all&per_page=100'), { paginate: true })).map((/** @type {any} */ m) => m.title));
-    for (const title of BUCKETS) if (!have.has(title)) await api(ctx, repoPath(ctx, 'milestones'), { method: 'POST', body: { title } });
+    for (const title of BUCKETS) {
+      if (have.has(title)) continue;
+      const landed = async () => foundAs((await api(ctx, repoPath(ctx, 'milestones?state=all&per_page=100'), { paginate: true })).find((/** @type {any} */ m) => m.title === title));
+      await api(ctx, repoPath(ctx, 'milestones'), { method: 'POST', body: { title }, landed });
+    }
   },
   'ruleset.create': async (ctx, k) => {
     if (await ruleset(ctx)) return;
-    await api(ctx, repoPath(ctx, 'rulesets'), { method: 'POST', body: rulesetBody(k.document.inspection?.mergeQueue === 'yes') });
+    await api(ctx, repoPath(ctx, 'rulesets'), { method: 'POST', body: rulesetBody(k.document.inspection?.mergeQueue === 'yes'), landed: async () => foundAs(await ruleset(ctx)) });
   },
   'ruleset.require-check': async (ctx) => {
     const found = await ruleset(ctx);

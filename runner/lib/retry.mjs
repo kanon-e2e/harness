@@ -1,7 +1,7 @@
 // Retries and classification (Kanon plan 0012 §10). A call to GitHub, by `gh` or by `git`, that
 // fails on a 5xx, a rate limit, a network error or GitHub's own failure to answer is retried, up
-// to three times, backing off; a
-// false expectation never is: it is the finding. What is left after the retries is `infra`, as is a token that no longer
+// to three times, backing off; a write only after a lookup says its first attempt didn't land
+// (#130). A false expectation never is: it is the finding. What is left after the retries is `infra`, as is a token that no longer
 // works (401). Anything else that isn't a `Fail` is the harness's own error, and reads `fail`,
 // so a broken runner is never mistaken for a quiet infrastructure day.
 
@@ -28,21 +28,70 @@ const EXPIRED = /\bHTTP 401\b|Bad credentials/;
 /** Whether a failed call is worth asking again. @param {{ status: number, stderr?: string }} r */
 export const isRetryable = (r) => r.status !== 0 && (SERVER.test(String(r.stderr)) || RATE.test(String(r.stderr)) || NETWORK.test(String(r.stderr)) || GITHUB.test(String(r.stderr)));
 
+// A write GitHub may have committed before its answer was lost (#130): a POST, a DELETE, a GraphQL
+// mutation, or a `gh` command that isn't a read. A PUT or a PATCH sets a whole state, so asking it
+// again leaves the same state: it is retried as a read is.
+const READS = new Set(['view', 'list', 'download', 'status', 'diff', 'checks']);
+const queryOf = (/** @type {string | undefined} */ input) => {
+  try {
+    return String(JSON.parse(String(input)).query ?? '');
+  } catch {
+    return '';
+  }
+};
+
+/**
+ * Whether a `gh` call writes, so that asking it again could write twice.
+ * @param {string[]} args @param {string} [input]
+ */
+export const isWrite = (args, input) => {
+  if (args[0] !== 'api') return !READS.has(String(args[1]));
+  const at = args.indexOf('-X');
+  const method = at >= 0 ? String(args[at + 1]).toUpperCase() : 'GET';
+  if (method !== 'POST' && method !== 'DELETE') return false;
+  return args.includes('graphql') ? /^\s*mutation\b/.test(queryOf(input)) : true;
+};
+
 /**
  * `gh`, retried: each call that fails retryably is asked again up to three times, after 2, 4 and
  * 8 seconds (a minute on a rate limit), and the last answer is given back as it is.
- * @template {(...a: any[]) => Promise<{ status: number, stdout: string, stderr: string }>} G
+ *
+ * A write is asked again only after a lookup says its first attempt didn't land (the Owner,
+ * 2026-10-25, #130): its caller passes `{ landed }`, which reads GitHub (the pull request for the
+ * head, the issue, the label, the milestone, the ruleset) and answers `{ answer }`, what the write
+ * would have answered, or null. Found, that answer is the call's, and nothing is asked again. A
+ * write with no lookup is never asked again: its failure comes back as it is, and reads `infra`.
+ * @template {(args: string[], input?: string, opts?: { landed?: () => Promise<{ answer: any } | null> }) => Promise<{ status: number, stdout: string, stderr: string }>} G
  * @param {G} gh @param {{ sleep: (ms: number) => Promise<void> }} clock
  * @returns {G}
  */
-export const retrying = (gh, { sleep }) => /** @type {G} */ (async (...a) => {
-  let r = await gh(...a);
+export const retrying = (gh, clock) => /** @type {G} */ ((args, input, opts) => {
+  if (!isWrite(args, input)) return again(() => gh(args, input), clock);
+  const landed = opts?.landed;
+  if (!landed) return gh(args, input, opts);
+  return again(() => gh(args, input, opts), clock, async () => {
+    const found = await landed();
+    return found ? { status: 0, stdout: found.answer == null ? '' : JSON.stringify(found.answer), stderr: '' } : null;
+  });
+});
+
+/**
+ * Asks `call` until it answers other than retryably, up to three more times, backing off. Before
+ * each time again, `look` may answer in its place.
+ * @param {() => Promise<{ status: number, stdout: string, stderr: string }>} call
+ * @param {{ sleep: (ms: number) => Promise<void> }} clock
+ * @param {() => Promise<{ status: number, stdout: string, stderr: string } | null>} [look]
+ */
+const again = async (call, { sleep }, look) => {
+  let r = await call();
   for (let i = 0; i < RETRIES && isRetryable(r); i++) {
     await sleep(RATE.test(String(r.stderr)) ? RATE_LIMIT_WAIT_MS : FIRST_BACKOFF_MS * 2 ** i);
-    r = await gh(...a);
+    const found = look ? await look() : null;
+    if (found) return found;
+    r = await call();
   }
   return r;
-});
+};
 
 /** `git`'s commands that talk to GitHub, and so are retried as a `gh` call is. */
 const TRANSPORT = new Set(['clone', 'fetch', 'push', 'ls-remote']);
@@ -65,10 +114,7 @@ const gitCommand = (args) => {
  * @param {E} exec @param {{ sleep: (ms: number) => Promise<void> }} clock
  * @returns {E}
  */
-export const retryingExec = (exec, clock) => {
-  const retried = retrying(exec, clock);
-  return /** @type {E} */ ((cmd, args, opts) => (cmd === 'git' && TRANSPORT.has(String(gitCommand(args))) ? retried(cmd, args, opts) : exec(cmd, args, opts)));
-};
+export const retryingExec = (exec, clock) => /** @type {E} */ ((cmd, args, opts) => (cmd === 'git' && TRANSPORT.has(String(gitCommand(args))) ? again(() => exec(cmd, args, opts), clock) : exec(cmd, args, opts)));
 
 /**
  * What an error thrown by a step makes the scenario: `fail` for a false expectation or a deadline
