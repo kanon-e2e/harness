@@ -31,7 +31,7 @@ export default {
       return found ? met(found) : unmet(`no open pull request is labelled "${PENDING}" yet`);
     }, end);
     remember(ctx, 'prs', 'release', pr.number);
-    const started = await startMerge(ctx, pr.number, 'front-door');
+    const started = await startMerge(ctx, pr.number, 'front-door', { minutes: step.deadline, end });
     const merged = await poll(ctx, step.deadline, mergedProbe(ctx, pr.number, started), end);
     // release-please runs on the merge commit's push: with no push run for it, `infra` (#115).
     const release = await onPush(ctx, merged.merge_commit_sha, () => poll(ctx, step.deadline, async () => {

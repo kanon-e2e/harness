@@ -314,13 +314,135 @@ describe('pr.merge', () => {
     expect(g.calls.map((c) => c.key)).toEqual(['POST graphql', `pr merge 5 -R ${REPO} --squash --auto`, `pr merge 5 -R ${REPO} --squash`, `GET repos/${REPO}/pulls/5`]);
   });
 
-  it('fails with GitHub\'s answer when the merge without auto-merge is refused too', async () => {
+  it('fails with GitHub\'s answer when the merge without auto-merge is refused for a reason no check explains', async () => {
     const g = stubGh({
       ...graphql(queueState()),
       [`pr merge 5 -R ${REPO} --squash --auto`]: fail('GraphQL: Auto merge is not allowed for this repository (enablePullRequestAutoMerge)'),
-      [`pr merge 5 -R ${REPO} --squash`]: fail('Required status check "Lane check" is expected.'),
+      [`pr merge 5 -R ${REPO} --squash`]: fail('X Pull request kanon-e2e/e2e-sample-123-1#5 is not mergeable: the merge commit cannot be cleanly created.'),
     });
-    await expect(run('pr.merge', { pr: 'docs', via: 'front-door', deadline: 5 }, context({ gh: g.gh, state: { prs: { docs: 5 } } }))).rejects.toThrow(/Lane check/);
+    const ctx = context({ gh: g.gh, state: { prs: { docs: 5 } } });
+    await expect(run('pr.merge', { pr: 'docs', via: 'front-door', deadline: 5 }, ctx)).rejects.toThrow(/cannot be cleanly created/);
+    expect(g.calls.filter((c) => c.key.startsWith('pr merge'))).toHaveLength(2);
+    expect(ctx.clock.sleeps).toEqual([]);
+  });
+
+  // Where auto-merge is off and the ruleset requires a check (`repo.apply`'s second call adds
+  // `Lane check`), GitHub refuses the merge made at once until the check reports (#33). The front
+  // door asks again within the step's deadline while a required check hasn't concluded, fails at
+  // once on one that failed, and fails with GitHub's answer where no required check explains it.
+  describe('where auto-merge is off and the ruleset requires a check (#33)', () => {
+    const DIRECT = `pr merge 5 -R ${REPO} --squash`;
+    const POLICY = 'X Pull request kanon-e2e/e2e-sample-123-1#5 is not mergeable: the base branch policy prohibits the merge.';
+    const OPEN = { state: 'open', merged: false, base: { ref: 'main' }, head: { sha: 'abc1234' } };
+    const RULES = [{ type: 'pull_request' }, { type: 'required_status_checks', parameters: { required_status_checks: [{ context: 'Lane check' }] } }];
+    const routes = ({ direct, runs = { check_runs: [] }, statuses = { statuses: [] }, rules = RULES, prs = [OPEN, { state: 'closed', merged: true }] }) => stubGh({
+      ...graphql(queueState()),
+      [`pr merge 5 -R ${REPO} --squash --auto`]: fail('GraphQL: Auto merge is not allowed for this repository (enablePullRequestAutoMerge)'),
+      [DIRECT]: direct,
+      ...pulls(...prs),
+      [`GET repos/${REPO}/rules/branches/main?per_page=100`]: [rules],
+      [`GET repos/${REPO}/commits/abc1234/check-runs?check_name=Lane%20check&per_page=100`]: runs,
+      [`GET repos/${REPO}/commits/abc1234/status`]: statuses,
+    });
+    const merges = (g) => g.calls.filter((c) => c.key === DIRECT).length;
+    const merging = (g, deadline = 5) => {
+      const ctx = context({ gh: g.gh, state: { prs: { docs: 5 } } });
+      return { ctx, done: run('pr.merge', { pr: 'docs', via: 'front-door', deadline }, ctx) };
+    };
+
+    it('asks again while the required check hasn\'t reported, or is running, and merges once it passes', async () => {
+      const g = routes({
+        direct: inTurn(fail(POLICY), fail(POLICY), undefined),
+        runs: inTurn({ check_runs: [] }, { check_runs: [{ id: 1, status: 'in_progress', conclusion: null }] }),
+        prs: [OPEN, OPEN, { state: 'closed', merged: true }],
+      });
+      const { ctx, done } = merging(g);
+      await done;
+      expect(merges(g)).toBe(3);
+      expect(ctx.clock.sleeps).toEqual([2000, 4000]);
+    });
+
+    it('waits on a commit status of the required name, as on a check run', async () => {
+      const g = routes({ direct: inTurn(fail(POLICY), undefined), statuses: { statuses: [{ context: 'Lane check', state: 'pending' }] } });
+      const { ctx, done } = merging(g);
+      await done;
+      expect(merges(g)).toBe(2);
+      expect(ctx.clock.sleeps).toEqual([2000]);
+    });
+
+    it('asks again when every required check passed but GitHub hasn\'t caught up yet', async () => {
+      const g = routes({ direct: inTurn(fail(POLICY), undefined), runs: { check_runs: [{ id: 1, status: 'completed', conclusion: 'success' }] } });
+      const { done } = merging(g);
+      await done;
+      expect(merges(g)).toBe(2);
+    });
+
+    it('waits on GitHub\'s own refusal for a required check that is expected, too', async () => {
+      const g = routes({ direct: inTurn(fail('GraphQL: Required status check "Lane check" is expected. (mergePullRequest)'), undefined) });
+      const { done } = merging(g);
+      await done;
+      expect(merges(g)).toBe(2);
+    });
+
+    it('fails at once, naming the check, when a required check failed', async () => {
+      for (const [runs, statuses, read] of [
+        [{ check_runs: [{ id: 1, status: 'completed', conclusion: 'success' }, { id: 2, status: 'completed', conclusion: 'failure' }] }, { statuses: [] }, 'failure'],
+        [{ check_runs: [] }, { statuses: [{ context: 'Lane check', state: 'error' }] }, 'error'],
+      ]) {
+        const g = routes({ direct: fail(POLICY), runs, statuses });
+        const { ctx, done } = merging(g);
+        await expect(done).rejects.toMatchObject({ name: 'Fail', message: expect.stringMatching(new RegExp(`required check \`Lane check\` concluded ${read} on abc1234`)) });
+        expect(merges(g)).toBe(1);
+        expect(ctx.clock.sleeps).toEqual([]);
+      }
+    });
+
+    it('fails with GitHub\'s answer at once where the ruleset requires no check', async () => {
+      const g = routes({ direct: fail(POLICY), rules: [{ type: 'pull_request' }] });
+      const { ctx, done } = merging(g);
+      await expect(done).rejects.toThrow(/base branch policy prohibits the merge/);
+      expect(merges(g)).toBe(1);
+      expect(ctx.clock.sleeps).toEqual([]);
+    });
+
+    it('fails with GitHub\'s answer at once when a later refusal is for another reason', async () => {
+      const g = routes({ direct: inTurn(fail(POLICY), fail('X Pull request kanon-e2e/e2e-sample-123-1#5 is not mergeable: the merge commit cannot be cleanly created.')), prs: [OPEN] });
+      const { ctx, done } = merging(g);
+      await expect(done).rejects.toThrow(/cannot be cleanly created/);
+      expect(merges(g)).toBe(2);
+      expect(ctx.clock.sleeps).toEqual([2000]);
+    });
+
+    it('fails when the deadline passes with the check still pending, naming it', async () => {
+      const g = routes({ direct: fail(POLICY), prs: [OPEN] });
+      const { done } = merging(g, 1);
+      await expect(done).rejects.toMatchObject({ name: 'Fail', message: expect.stringMatching(/deadline of 1 minute passed: required check `Lane check` hasn't reported on abc1234 yet/) });
+      const running = routes({ direct: fail(POLICY), prs: [OPEN], runs: { check_runs: [{ id: 1, status: 'in_progress', conclusion: null }] } });
+      await expect(merging(running, 1).done).rejects.toMatchObject({ name: 'Fail', message: expect.stringMatching(/deadline of 1 minute passed: required check `Lane check` is in_progress on abc1234/) });
+    });
+
+    it('one deadline covers the wait to merge and the wait for the merge', async () => {
+      // 2 + 4 + 8 + 16 + 30 seconds waiting for the check: the merge must land within the minute and a half left.
+      const g = routes({ direct: inTurn(fail(POLICY), fail(POLICY), fail(POLICY), fail(POLICY), fail(POLICY), undefined), prs: [OPEN, OPEN, OPEN, OPEN, OPEN, OPEN] });
+      const { ctx, done } = merging(g, 2);
+      await expect(done).rejects.toMatchObject({ name: 'Fail', message: expect.stringMatching(/deadline of 2 minutes passed: pull request #5 is not merged yet/) });
+      expect(ctx.clock.sleeps.reduce((a, b) => a + b, 0)).toBe(120_000);
+    });
+
+    it('stops asking when the pull request merged meanwhile, or closed', async () => {
+      const merged = routes({ direct: fail(POLICY), prs: [{ ...OPEN, state: 'closed', merged: true }] });
+      await merging(merged).done;
+      expect(merges(merged)).toBe(1);
+      const closed = routes({ direct: fail(POLICY), prs: [{ ...OPEN, state: 'closed' }] });
+      await expect(merging(closed).done).rejects.toMatchObject({ name: 'Fail', message: expect.stringMatching(/closed without merging/) });
+    });
+
+    it('a merge as the driver doesn\'t wait: `--admin` passes the ruleset', async () => {
+      const g = stubGh({ [`pr merge 5 -R ${REPO} --squash --admin`]: fail(POLICY) });
+      const ctx = context({ gh: g.gh, state: { prs: { docs: 5 } } });
+      await expect(run('pr.merge', { pr: 'docs', via: 'bypass', deadline: 5 }, ctx)).rejects.toThrow(/base branch policy/);
+      expect(ctx.clock.sleeps).toEqual([]);
+    });
   });
 
   it('as the driver, where the ruleset lets a bypass actor through', async () => {
@@ -467,6 +589,27 @@ describe('release.cut', () => {
     const ctx = context({ gh: g.gh });
     await run('release.cut', { deadline: 30 }, ctx);
     expect(ctx.state.prs).toEqual({ release: 12 });
+    expect(ctx.state.release).toEqual({ id: 4, tag: 'v0.1.0' });
+  });
+
+  it('waits for the required check before it merges, where auto-merge is off (#33)', async () => {
+    const g = stubGh({
+      [`GET repos/${REPO}/pulls?state=open&per_page=100`]: [[{ number: 12, labels: [{ name: 'autorelease: pending' }] }]],
+      'POST graphql': { data: { repository: { pullRequest: { id: 'PR_node12', headRefOid: 'abc1234', isMergeQueueEnabled: false, isInMergeQueue: false, timelineItems: { nodes: [] } } } } },
+      [`pr merge 12 -R ${REPO} --squash --auto`]: fail('GraphQL: Auto merge is not allowed for this repository (enablePullRequestAutoMerge)'),
+      [`pr merge 12 -R ${REPO} --squash`]: inTurn(fail('X Pull request kanon-e2e/e2e-sample-123-1#12 is not mergeable: the base branch policy prohibits the merge.'), undefined),
+      [`GET repos/${REPO}/pulls/12`]: inTurn(
+        { state: 'open', merged: false, base: { ref: 'main' }, head: { sha: 'abc1234' } },
+        { state: 'closed', merged: true, merged_at: '2026-10-17T10:00:00Z' },
+      ),
+      [`GET repos/${REPO}/rules/branches/main?per_page=100`]: [[{ type: 'required_status_checks', parameters: { required_status_checks: [{ context: 'Lane check' }] } }]],
+      [`GET repos/${REPO}/commits/abc1234/check-runs?check_name=Lane%20check&per_page=100`]: { check_runs: [{ id: 1, status: 'queued', conclusion: null }] },
+      [`GET repos/${REPO}/commits/abc1234/status`]: { statuses: [] },
+      [`GET repos/${REPO}/releases?per_page=20`]: [{ id: 4, tag_name: 'v0.1.0', draft: false, published_at: '2026-10-17T10:00:08Z', author: { login: 'kanon-e2e-releaser[bot]' } }],
+    });
+    const ctx = context({ gh: g.gh });
+    await run('release.cut', { deadline: 30 }, ctx);
+    expect(g.calls.filter((c) => c.key === `pr merge 12 -R ${REPO} --squash`)).toHaveLength(2);
     expect(ctx.state.release).toEqual({ id: 4, tag: 'v0.1.0' });
   });
 
@@ -876,6 +1019,22 @@ describe('a write the runner asks again after GitHub\'s failure is looked up fir
     const off = flaky({ 'POST graphql': plain(false), [AUTO]: undefined, [`GET repos/${REPO}/pulls/5`]: inTurn({ state: 'open', merged: false, auto_merge: null }, { state: 'closed', merged: true }) }, AUTO);
     await run('pr.merge', { pr: 'docs', via: 'front-door', deadline: 5 }, off.ctx({ state: { prs: { docs: 5 } } }));
     expect(off.count(AUTO)).toBe(2);
+  });
+
+  it('pr.merge: the merge made at once where auto-merge is off, asked again only when it didn\'t merge (#33)', async () => {
+    const DIRECT = `pr merge 5 -R ${REPO} --squash`;
+    const routes = (prs) => ({
+      'POST graphql': { data: { repository: { pullRequest: { id: 'PR_node5', headRefOid: 'abc1234', isMergeQueueEnabled: false, isInMergeQueue: false, timelineItems: { nodes: [] } } } } },
+      [`pr merge 5 -R ${REPO} --squash --auto`]: fail('GraphQL: Auto merge is not allowed for this repository (enablePullRequestAutoMerge)'),
+      [DIRECT]: undefined,
+      [`GET repos/${REPO}/pulls/5`]: inTurn(...prs),
+    });
+    const landed = flaky(routes([{ state: 'closed', merged: true }]), DIRECT);
+    await run('pr.merge', { pr: 'docs', via: 'front-door', deadline: 5 }, landed.ctx({ state: { prs: { docs: 5 } } }));
+    expect(landed.count(DIRECT)).toBe(1);
+    const lost = flaky(routes([{ state: 'open', merged: false, auto_merge: null }, { state: 'closed', merged: true }]), DIRECT);
+    await run('pr.merge', { pr: 'docs', via: 'front-door', deadline: 5 }, lost.ctx({ state: { prs: { docs: 5 } } }));
+    expect(lost.count(DIRECT)).toBe(2);
   });
 
   it('a write with no reliable lookup is asked once, and reads `infra`: workflow.dispatch', async () => {
