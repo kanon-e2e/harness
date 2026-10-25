@@ -6,6 +6,8 @@ Kanon's plan 0012 §4 makes a scenario data: a directory here, `scenarios/<scena
 
 **The real-model tier gets past the same gate with the Author** (the Owner, 2026-10-20). [`review-real/`](review-real/README.md), plan 0012 step E10, names an `authorLabel` in its `scenario.json`: after phase 1, `e2e.yml`'s `author-label` job mints the test Author's token and applies `review:please`, as an adopter's Implementer labels its own pull request. No verb does it, because no `act` job holds an Author token ([`docs/jobs.md`](../docs/jobs.md)).
 
+**`runsOn` keeps a scenario to some kinds of run** (the Owner, 2026-10-25, #139). `scenario.json` may name `runsOn`, a non-empty list of `candidate` (the poll, and a whole-catalogue dispatch for a candidate), `dispatch` (any other dispatch) and `scheduled` (the nightly). Left out, the scenario takes part in every kind of run. A `select=<id>` dispatch runs it whatever the list says, so a temporary failing copy for a mutation run takes `["dispatch"]` and is dispatched by its id. A `gate: true` scenario must list `candidate`. [The harness's README](../README.md#runs) has the whole rule.
+
 ## The rules every verb keeps
 
 - **A closed set.** A step names one of the verbs below, and only the arguments that verb takes. A scenario that needs another verb adds it in a pull request, with its unit test. `runner/` is the Owner's to merge ([`docs/qa/escalation-paths.md`](../docs/qa/escalation-paths.md)).

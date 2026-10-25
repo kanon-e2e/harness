@@ -25,6 +25,11 @@
 // of a scenario or a family plans what it selects, and is refused only when that selection passes
 // the cap. When the gating scenarios alone pass the cap, `plan` fails, as no run could gate.
 //
+// RUNS ON (#139; the Owner, 2026-10-25): a scenario whose `runsOn` leaves out this kind of run
+// is dropped before the cap, so it takes no rotation slot. The poll and a whole-catalogue dispatch
+// for a candidate are `candidate`, the nightly `scheduled`, any other dispatch `dispatch`; a
+// `select=<id>` runs its scenario whatever its `runsOn`.
+//
 // THE REAL-MODEL LEDGER (§6.2, E10; runner/ledger.mjs): each `claude: subscription` scenario the
 // run would hold is admitted or refused before any repository is created. One refused for its
 // expected cost is left out of the matrix and handed to `verdict` as `skipped: budget`; one with
@@ -45,7 +50,7 @@ import { RELEASE } from './lib/kanon.mjs';
 import { admit, isModel, recordedCosts } from './ledger.mjs';
 import { ghProcess } from './lib/proc.mjs';
 import { maxScenarios, SETTINGS } from './sizing.mjs';
-import { loadScenario, scenarioDirs } from './validate.mjs';
+import { loadScenario, runsOn, scenarioDirs } from './validate.mjs';
 
 const K = `repos/${SETTINGS.kanon}`;
 const H = `repos/${SETTINGS.harness}`;
@@ -118,12 +123,20 @@ export async function decide(input, deps) {
       : input.event === 'schedule' && input.schedule === SETTINGS.schedules.nightly ? 'nightly' : null;
   if (!kind) throw new Error(`plan runs on the poll's schedule, the nightly's or a dispatch, not \`${input.event}\` \`${input.schedule}\``);
 
+  // RUNS ON (#139): the kind of run this is, as a scenario's `runsOn` names it. The poll, and a
+  // dispatch of the whole catalogue for a candidate, are a candidate's run; the nightly is
+  // `scheduled`, whatever release it runs; any other dispatch is `dispatch`, but a `select=<id>`
+  // runs the scenario it names whatever its `runsOn` says. A scenario kept out is gone before the
+  // cap, so it takes no rotation slot.
+  const runKind = kind === 'nightly' ? 'scheduled'
+    : kind === 'poll' || (!input.select && CANDIDATE.test(input.release)) ? 'candidate' : 'dispatch';
   /** @type {any[]} */
-  let chosen = input.catalogue;
+  let chosen = input.catalogue.filter((s) => runsOn(s, runKind));
   if (kind === 'dispatch') {
     if (!RELEASE.test(input.release)) throw new Error(`\`${input.release}\` is not an exact Kanon release (vX.Y.Z or candidate-vX.Y.Z)`);
     if (input.select) {
-      chosen = input.catalogue.filter((s) => s.id === input.select || s.family === input.select);
+      chosen = input.catalogue.filter((s) => s.id === input.select || (s.family === input.select && runsOn(s, 'dispatch')));
+      if (!chosen.length && input.catalogue.some((s) => s.family === input.select)) throw new Error(`\`${input.select}\`'s scenarios each leave \`dispatch\` out of \`runsOn\`: dispatch one by its id`);
       if (!chosen.length) throw new Error(`\`${input.select}\` names no scenario and no family of the catalogue`);
     }
   }
@@ -138,7 +151,8 @@ export async function decide(input, deps) {
     if (chosen.length > cap) throw new Error(`\`${input.select}\` selects ${chosen.length} scenarios, past the cap of ${cap} a run may hold: one run of them would outlast the nightly interval or the repositories an hour (runner/sizing.mjs)`);
   } else fitCap(chosen, cap, day);
   const trigger = kind === 'poll' ? 'candidate' : kind;
-  if (!chosen.length) return stop(trigger, 'there is no scenario to run in scenarios/');
+  if (!input.catalogue.length) return stop(trigger, 'there is no scenario to run in scenarios/');
+  if (!chosen.length) return stop(trigger, `no scenario in scenarios/ runs on the ${kind === 'nightly' ? 'nightly' : kind === 'poll' ? 'poll' : 'dispatch'}: each one's \`runsOn\` leaves out \`${runKind}\``);
 
   // ONE RUN AT A TIME: a run of this workflow in flight, other than this one, that recorded a marker.
   const runs = (await api(ctx, `${H}/actions/workflows/e2e.yml/runs?status=in_progress&per_page=100`))?.workflow_runs ?? [];
