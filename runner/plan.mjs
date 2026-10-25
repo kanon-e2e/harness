@@ -30,6 +30,8 @@
 // expected cost is left out of the matrix and handed to `verdict` as `skipped: budget`; one with
 // no recorded cost runs only on a dispatch, alone, and is otherwise left out, with the reason in
 // the summary. A gating one refused for any reason is handed to `verdict` too (#107). A refused scenario gets no repository and no model token.
+// On the poll and the nightly, a `gate: false` one with no recorded cost is set aside before the
+// cap: it takes no rotation slot, and the cap's "leaves out" doesn't name it (#109).
 //
 //   node runner/plan.mjs   (reads EVENT, SCHEDULE, RELEASE, SELECT, GITHUB_RUN_ID, GH_TOKEN;
 //                           writes GITHUB_OUTPUT, the step summary and MARKER_DIR/marker.json)
@@ -125,14 +127,16 @@ export async function decide(input, deps) {
       if (!chosen.length) throw new Error(`\`${input.select}\` names no scenario and no family of the catalogue`);
     }
   }
-  // THE CAP, on what this run plans.
+  // THE CAP, on what this run plans. A selection is held to it here; anything else is fitted to it
+  // in `go`, once the ledger has read the history (#109), and checked here only so that gating
+  // scenarios past the cap fail `plan` before it reads anything.
   /** @type {string[]} */
   let left = [];
-  if (kind === 'dispatch' && input.select) {
+  const day = Math.floor(deps.now() / DAY_MS);
+  const capped = !(kind === 'dispatch' && input.select);
+  if (!capped) {
     if (chosen.length > cap) throw new Error(`\`${input.select}\` selects ${chosen.length} scenarios, past the cap of ${cap} a run may hold: one run of them would outlast the nightly interval or the repositories an hour (runner/sizing.mjs)`);
-  } else {
-    ({ planned: chosen, left } = fitCap(chosen, cap, Math.floor(deps.now() / DAY_MS)));
-  }
+  } else fitCap(chosen, cap, day);
   const trigger = kind === 'poll' ? 'candidate' : kind;
   if (!chosen.length) return stop(trigger, 'there is no scenario to run in scenarios/');
 
@@ -162,11 +166,26 @@ export async function decide(input, deps) {
   };
   const sha = async (/** @type {string} */ ref) => String((await api(ctx, `${K}/commits/${ref}`)).sha);
   // THE LEDGER, last, once the run is going ahead: it reads the real-model scenarios' history.
+  // On the poll and the nightly, a `gate: false` one with no recorded cost, which the ledger
+  // refuses there whatever the cap does, is set aside BEFORE the cap, so it takes no rotation
+  // slot and the cap fills that slot with a scenario that starts (#109). The ledger still refuses
+  // it, with its reason, and the cap's "leaves out" names only what the cap kept out. A gating
+  // one stays in (the cap plans every one, and its refusal reaches `verdict`, #107); a dispatch
+  // fits the cap first, as before, since it may start one with no history, alone.
   const go = async (/** @type {Partial<Decision>} */ d) => {
-    const models = chosen.filter(isModel);
+    /** The cap, on `chosen` less the scenarios `aside`, which stay in for the ledger. @param {Set<string>} aside */
+    const fit = (aside) => {
+      const fitted = fitCap(chosen.filter((s) => !aside.has(s.id)), cap, day);
+      left = fitted.left;
+      const planned = new Set(fitted.planned.map((s) => s.id));
+      chosen = chosen.filter((s) => planned.has(s.id) || aside.has(s.id));
+    };
+    if (capped && kind === 'dispatch') fit(new Set());
     /** @type {Record<string, number[]>} */
     const history = {};
-    for (const m of models) history[m.id] = await recordedCosts(ctx, m.id);
+    for (const m of chosen.filter(isModel)) history[m.id] = await recordedCosts(ctx, m.id);
+    if (capped && kind !== 'dispatch') fit(new Set(chosen.filter((s) => isModel(s) && s.gate !== true && !history[s.id].length).map((s) => s.id)));
+    const models = chosen.filter(isModel);
     const { admitted, refused } = admit({ kind, models: models.map(entry), history });
     const refusedIds = new Set(refused.map((r) => r.id));
     const ledger = [...admitted.map((a) => ({ id: a.id, started: true, reason: a.reason })), ...refused.map((r) => ({ id: r.id, started: false, reason: r.reason }))];

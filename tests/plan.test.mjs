@@ -290,6 +290,64 @@ describe('the cap holds what a run plans, gating scenarios first (the Owner, 202
     expect(ids(one)).toEqual(['f-03']);
   });
 
+  // #109: a real-model scenario the ledger refuses for no recorded cost takes no rotation slot.
+  const model = { ...CATALOGUE[2], id: 'review-real', gate: false };
+  const withModel = [...gating, ...free.slice(0, 11), model];
+  const planModel = (days, input, { [DOWNLOADS]: downloads = {}, ...routes }) => {
+    const g = stubGh(routes);
+    // `run download` writes the result the world holds, as `plan`'s own helper does.
+    const gh = async (args, body) => {
+      if (args[0] !== 'run' || args[1] !== 'download') return g.gh(args, body);
+      if (!downloads[args[2]]) return { status: 1, stdout: '', stderr: 'no artifact' };
+      writeFileSync(join(args[args.indexOf('-D') + 1], 'result.json'), JSON.stringify(downloads[args[2]]));
+      return { status: 0, stdout: '', stderr: '' };
+    };
+    return decide({ catalogue: withModel, runId: '999', release: '', select: '', schedule: '', ...input }, { gh, now: at(days) });
+  };
+
+  it('on the poll and the nightly, a real-model scenario with no recorded cost takes no `gate: false` slot: the cap fills it with one that starts (#109)', async () => {
+    for (const input of [{ event: 'schedule', schedule: NIGHTLY }, { event: 'schedule', schedule: POLL }]) {
+      for (let day = 0; day < 9; day++) {
+        const out = await planModel(day, input, world());
+        expect(out.go, `day ${day}`).toBe(true);
+        expect(ids(out), `day ${day}`).not.toContain('review-real');
+        expect(out.scenarios, `day ${day}`).toHaveLength(CAP);
+        // The summary's "left out by the cap" names only what the cap kept out: 11 for 8 slots.
+        expect(out.left, `day ${day}`).toHaveLength(3);
+        expect(out.left, `day ${day}`).not.toContain('review-real');
+        expect(out.reason, `day ${day}`).not.toMatch(/leaves out, this time:.*review-real/);
+        expect(out.ledger, `day ${day}`).toEqual([{ id: 'review-real', started: false, reason: expect.stringMatching(/no recorded cost/) }]);
+        for (const g of gating) expect(ids(out), `day ${day}`).toContain(g.id);
+      }
+    }
+  });
+
+  it('with a recorded cost, the real-model scenario still rotates under the cap like any `gate: false` one (#109)', async () => {
+    const seen = new Set();
+    for (let day = 0; day < 2; day++) {
+      const out = await planModel(day, { event: 'schedule', schedule: NIGHTLY }, world({ history: [0.5] }));
+      expect(out.scenarios).toHaveLength(CAP);
+      expect(out.left).toHaveLength(4);
+      for (const id of ids(out)) seen.add(id);
+    }
+    expect(seen.has('review-real')).toBe(true);
+  });
+
+  it('a gating real-model scenario with no recorded cost still holds its place among the gating ones, and reaches `verdict` as `skipped` (#107, #109)', async () => {
+    const out = await decide({ catalogue: [...gating, ...free.slice(0, 11), { ...model, gate: true }], runId: '999', release: '', select: '', schedule: '', event: 'schedule', schedule: POLL }, { gh: stubGh(world()).gh, now: at(0) });
+    // 7 gating leave 7 slots for the 11 `gate: false`: the cap is what it was before #109.
+    expect(out.left).toHaveLength(4);
+    expect(out.scenarios).toHaveLength(CAP - 1);
+    expect(out.skipped).toEqual([{ id: 'review-real', gate: true, skipped: 'no-history' }]);
+  });
+
+  it('a dispatch of the whole catalogue is unchanged: the cap first, then the ledger, alone (#109)', async () => {
+    const out = await planModel(0, { event: 'workflow_dispatch', release: 'v0.41.0' }, world());
+    const { planned, left } = fitCap(withModel, CAP, Math.floor(NOW / DAY));
+    expect(out.left).toEqual(left);
+    expect(ids(out)).toEqual(planned.map((s) => s.id));
+  });
+
   it('fails as before when the gating scenarios alone pass the cap', async () => {
     const all = Array.from({ length: CAP + 1 }, (_, i) => sc(`g-${i}`, true));
     await expect(plan({ event: 'schedule', schedule: NIGHTLY, catalogue: all }, world())).rejects.toThrow(/15 `gate: true` scenarios, past the cap of 14/);
