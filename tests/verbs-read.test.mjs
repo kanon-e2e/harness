@@ -1,6 +1,7 @@
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { pushRuns } from '../runner/lib/push.mjs';
 import { classify } from '../runner/lib/retry.mjs';
 import { VOCABULARY } from '../runner/vocabulary.mjs';
 import { REPO, RELEASE, context, fail, inTurn, stubGh } from './helpers/stubs.mjs';
@@ -190,11 +191,56 @@ describe('run.await', () => {
     expect(classify(e)).toBe('fail');
   });
 
-  it('reads `infra` when the deadline passes and GitHub delivered no push run of any kind for the commit (#115)', async () => {
-    const g = stubGh({ [`GET repos/${REPO}/branches/main`]: { commit: { sha: 'abc' } }, [RUNS]: { workflow_runs: [] }, [PUSH_RUNS]: { total_count: 0, workflow_runs: [] } });
+  const TREE = `GET repos/${REPO}/contents/.github/workflows/ci.yml?ref=abc`;
+  /** A contents answer, as GitHub sends a file: its text in base64. */
+  const file = (text) => ({ type: 'file', encoding: 'base64', content: Buffer.from(text).toString('base64') });
+  /** Kanon's own `ci.yml`, as `kanon init` writes it. */
+  const CI = '# The project\'s CI\nname: CI\n\non:\n  pull_request:\n  merge_group:\n  push:\n    branches: ["main"]\n\npermissions:\n  contents: read\n';
+  const dropped = (tree, extra = {}) => stubGh({ [`GET repos/${REPO}/branches/main`]: { commit: { sha: 'abc' } }, [RUNS]: { workflow_runs: [] }, [PUSH_RUNS]: { total_count: 0, workflow_runs: [] }, [TREE]: tree, ...extra });
+
+  it('reads `infra` when the commit\'s tree runs the workflow on that push and GitHub delivered no push run of any kind (#115, #126)', async () => {
+    const g = dropped(file(CI));
     const e = await run('run.await', { workflow: 'ci.yml', event: 'push', branch: 'main', deadline: 1 }, context({ gh: g.gh })).catch((x) => x);
     expect(classify(e)).toBe('infra');
     expect(e.message).toMatch(/deadline.*no run of ci\.yml.*no push run was delivered for abc/);
+    // The tree first (the Owner's decision of 2026-10-25), then the push runs.
+    const keys = g.calls.map((c) => c.key);
+    expect(keys.indexOf(TREE)).toBeGreaterThan(-1);
+    expect(keys.indexOf(TREE)).toBeLessThan(keys.indexOf(PUSH_RUNS));
+  });
+
+  it('reads `fail`, a Kanon finding, when the commit\'s tree has no such workflow, though no push run was delivered (#126)', async () => {
+    const g = dropped(fail('gh: Not Found (HTTP 404)'));
+    const e = await run('run.await', { workflow: 'ci.yml', event: 'push', branch: 'main', deadline: 1 }, context({ gh: g.gh })).catch((x) => x);
+    expect(classify(e)).toBe('fail');
+    expect(e).toMatchObject(failsWith(/deadline.*no run of ci\.yml.*abc's tree has no \.github\/workflows\/ci\.yml/));
+  });
+
+  it('reads `fail` when the workflow in the tree runs on no push to the branch: no trigger, or a branch filter that leaves it out (#126)', async () => {
+    for (const [text, re] of [
+      ['on:\n  pull_request:\n  merge_group:\n', /ci\.yml in abc's tree runs on no push to main/],
+      ['on:\n  push:\n    branches: [release]\n', /runs on no push to main/],
+      ['on:\n  push:\n    tags: [\'v*\']\n', /runs on no push to main/],
+    ]) {
+      const e = await run('run.await', { workflow: 'ci.yml', event: 'push', branch: 'main', deadline: 1 }, context({ gh: dropped(file(text)).gh })).catch((x) => x);
+      expect(classify(e)).toBe('fail');
+      expect(e).toMatchObject(failsWith(re));
+    }
+  });
+
+  it('stays `fail` when the tree can\'t be read, or it can\'t tell whether the workflow would run (#126)', async () => {
+    for (const tree of [fail('HTTP 502: Bad Gateway'), file('on:\n  push:\n    paths: [src/**]\n')]) {
+      const e = await run('run.await', { workflow: 'ci.yml', event: 'push', branch: 'main', deadline: 1 }, context({ gh: dropped(tree).gh })).catch((x) => x);
+      expect(classify(e)).toBe('fail');
+    }
+  });
+
+  it('reads the branch of a pull request\'s head for a `push` on `pr` (#126)', async () => {
+    const PR_PUSH = `GET repos/${REPO}/actions/workflows/ci.yml/runs?event=push&head_sha=abc&per_page=20`;
+    const routes = (branches) => stubGh({ [`GET repos/${REPO}/pulls/5`]: { head: { sha: 'abc', ref: 'feat/x' } }, [PR_PUSH]: { workflow_runs: [] }, [PUSH_RUNS]: { total_count: 0 }, [TREE]: file(`on:\n  push:\n    branches: [${branches}]\n`) });
+    const at = (branches) => run('run.await', { workflow: 'ci.yml', event: 'push', pr: 'docs', deadline: 1 }, context({ gh: routes(branches).gh, state: { prs: { docs: 5 } } })).catch((x) => x);
+    expect(classify(await at("'feat/**'"))).toBe('infra');
+    expect(await at('main')).toMatchObject(failsWith(/runs on no push to feat\/x/));
   });
 
   it('asks for push runs only on a `push` event: another event\'s deadline stays `fail`', async () => {
@@ -203,6 +249,38 @@ describe('run.await', () => {
     const e = await run('run.await', { workflow: 'ci.yml', event: 'pull_request', pr: 'docs', deadline: 1 }, context({ gh: g.gh, state: { prs: { docs: 5 } } })).catch((x) => x);
     expect(classify(e)).toBe('fail');
     expect(g.calls.map((c) => c.key)).not.toContain(`GET repos/${REPO}/actions/runs?event=push&head_sha=def&per_page=1`);
+  });
+});
+
+describe('pushRuns: whether a workflow\'s `on:` runs it on a push to a branch (#126)', () => {
+  const on = (block) => `name: CI\n${block}\njobs:\n  a:\n    runs-on: ubuntu-latest\n`;
+  it.each([
+    ['on: push', 'main', 'yes'],
+    ['"on": [pull_request, push]', 'main', 'yes'],
+    ["'on': pull_request", 'main', 'no'],
+    ['on:\n  - pull_request\n  - push # and pushes', 'main', 'yes'],
+    ['on:\n  push:\n  workflow_dispatch:', 'main', 'yes'],
+    ['on:\n  push: {}', 'main', 'yes'],
+    ['on:\n  pull_request:\n    branches: [main]', 'main', 'no'],
+    ['on:\n  push:\n    branches: ["main"]', 'main', 'yes'],
+    ['on:\n  push:\n    branches:\n      - develop\n      - main', 'main', 'yes'],
+    ['on:\n  push:\n    branches: [develop]', 'main', 'no'],
+    ['on:\n  push:\n    branches:\n    - main', 'main', 'yes'],
+    ['on:\n- push', 'main', 'yes'],
+    ["on:\n  push:\n    branches: ['release/**']", 'release/v1/x', 'yes'],
+    ["on:\n  push:\n    branches: ['release/*']", 'release/v1/x', 'no'],
+    ["on:\n  push:\n    branches: ['**', '!main']", 'main', 'no'],
+    ["on:\n  push:\n    branches: ['!main', '**']", 'main', 'yes'],
+    ['on:\n  push:\n    branches-ignore: [main]', 'main', 'no'],
+    ['on:\n  push:\n    branches-ignore: [develop]', 'main', 'yes'],
+    ["on:\n  push:\n    tags: ['v*']", 'main', 'no'],
+    ["on:\n  push:\n    branches: [main]\n    tags: ['v*']", 'main', 'yes'],
+    ['on:\n  push:\n    paths: [src/**]', 'main', 'unknown'],
+    ['on:\n  push:\n    branches: [develop]\n    paths-ignore: [docs/**]', 'main', 'no'],
+    ['on: { push: { branches: [main] } }', 'main', 'unknown'],
+    ['jobs-only: true', 'main', 'no'],
+  ])('%j on %s reads %s', (block, branch, read) => {
+    expect(pushRuns(on(block), branch)).toBe(read);
   });
 });
 
