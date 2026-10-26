@@ -22,7 +22,7 @@
     {
       "kanon": [],
       "act": [
-        { "verb": "run.await", "name": "digest", "workflow": "agent-project-digest.yml", "event": "workflow_dispatch", "branch": "main", "actor": "author", "deadline": 30 },
+        { "verb": "run.await", "name": "digest", "workflow": "agent-project-digest.yml", "event": "workflow_dispatch", "branch": "main", "actor": "author", "deadline": 23 },
         { "verb": "expect.row", "run": "digest", "lane": "project-digest", "job": "digest / digest", "ceilingUsd": 10, "deadline": 5 },
         { "verb": "expect.run", "run": "digest", "conclusion": "failure", "jobs": [{ "name": "digest / gate", "conclusion": "success" }, { "name": "digest / digest", "conclusion": "success" }, { "name": "digest / notify", "conclusion": "failure" }], "deadline": 2 }
       ]

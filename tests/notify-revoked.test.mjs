@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { validateScenarioDir, validateScenarioJson } from '../runner/validate.mjs';
+import { SETTINGS } from '../runner/sizing.mjs';
 import { VOCABULARY } from '../runner/vocabulary.mjs';
 import { REPO, RELEASE, context, stubGh, tempDir, writeTree } from './helpers/stubs.mjs';
 
@@ -51,7 +52,7 @@ describe('notify-revoked', () => {
   it('no step dispatches the digest as the driver: the Author does, between phase 1 and phase 2', () => {
     const steps = s.phases.flatMap((p) => [...p.kanon, ...p.act]);
     expect(steps.filter((x) => x.verb === 'workflow.dispatch').map((x) => x.workflow)).toEqual(['apps-check.yml']);
-    expect(s.phases[1].act[0]).toEqual({ verb: 'run.await', name: 'digest', workflow: s.scenario.authorDispatch.workflow, event: 'workflow_dispatch', branch: 'main', actor: 'author', deadline: 30 });
+    expect(s.phases[1].act[0]).toEqual({ verb: 'run.await', name: 'digest', workflow: s.scenario.authorDispatch.workflow, event: 'workflow_dispatch', branch: 'main', actor: 'author', deadline: 23 });
   });
 
   it('phase 2 holds the digest\'s cost row first, then the run: `notify` red, `digest` green; phase 3 holds doctor to `notify.failing`, blocking nothing', () => {
@@ -60,6 +61,13 @@ describe('notify-revoked', () => {
     expect(s.phases[1].act[1]).toEqual({ verb: 'expect.row', run: 'digest', lane: 'project-digest', job: 'digest / digest', ceilingUsd: 10, deadline: 5 });
     expect(s.phases[1].act[2]).toMatchObject({ conclusion: 'failure', jobs: [{ name: 'digest / gate', conclusion: 'success' }, { name: 'digest / digest', conclusion: 'success' }, { name: 'digest / notify', conclusion: 'failure' }] });
     expect(s.phases[2]).toEqual({ kanon: [{ verb: 'kanon.doctor' }, { verb: 'expect.doctor', unchecked: ['secrets', 'notify-secrets'], findings: ['notify.failing'], blocking: [] }], act: [] });
+  });
+
+  // MUTATION: a phase whose `act` waits pass the `act` job's timeout is killed before its result
+  // step runs, so a slow digest would read `missing`, not `fail`, and record no cost (#145).
+  it('MUTATION: fits each phase\'s `act` waits in an `act` job\'s 30 minutes', () => {
+    expect(SETTINGS.minutes.act).toBe(30);
+    for (const [i, p] of s.phases.entries()) expect(p.act.reduce((n, x) => n + (x.deadline ?? 0), 0), `phase ${i + 1}`).toBeLessThanOrEqual(SETTINGS.minutes.act);
   });
 
   it('asserts no collector `notify` row: only the digest\'s own cost row, `expect.row`\'s one kind', () => {
@@ -75,6 +83,8 @@ describe('notify-revoked', () => {
     expect(readme).toMatch(/A throwaway scenario repository isn't registered with the collector/);
     expect(readme).toMatch(/The first run is the Owner's dispatch, with this scenario selected alone/);
     expect(readme).toContain('select=notify-revoked');
+    // The Author's mint asks for Actions write, which its App registration must grant first (#145).
+    expect(readme).toMatch(/Before that first dispatch, the Author App's registration must grant Actions write/);
   });
 });
 
