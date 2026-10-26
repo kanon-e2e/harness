@@ -110,9 +110,15 @@ The **catalogue's cap** is the largest *n* whose longest running time fits the n
 - **`runsOn` comes before the cap** (#139). A scenario whose `runsOn` leaves out this kind of run is dropped before `fitCap`, so it takes no rotation slot and isn't named as left out. The poll and a whole-catalogue dispatch for a candidate are `candidate`; the nightly is `scheduled`; a whole-catalogue dispatch at a stable release and a family `select` are `dispatch`. A `select=<id>` runs its scenario whatever its `runsOn`.
 - **When the `gate: true` scenarios alone pass the cap,** `plan` fails, as no run could hold the gate. Then the limit must rise, or a scenario must leave the gate.
 
-**The janitor's cut-offs** follow: the longest running time at the cap, plus 100 minutes' margin for queueing, is **24 h 20 min**. A repository with `kanon-e2e-failed` gets 24 hours more, **48 h 20 min**. It runs hourly (`e2e-janitor.yml`). It deletes only repositories with the `kanon-e2e` topic, never the harness. Its run fails, by name, on a repository older than a day that it couldn't delete.
+**The janitor's cut-offs** follow: the longest running time at the cap, plus 100 minutes' margin for queueing, is **24 h 20 min**. A repository with `kanon-e2e-failed` gets 24 hours more, **48 h 20 min**. Its cron is hourly (`e2e-janitor.yml`), but its schedule is best effort ([below](#the-schedules-are-best-effort)), so a repository may outlive its cut-off by a few hours. It deletes only repositories with the `kanon-e2e` topic, never the harness. Its run fails, by name, on a repository older than a day that it couldn't delete.
 
 Change a setting and the tests name each place that must follow: the max-parallel on each matrix, each job's `timeout-minutes`, and the cut-offs.
+
+### The schedules are best effort
+
+The poll's cron is `*/15 * * * *`, the nightly's `7 3 * * *`, and the janitor's `23 * * * *`. On this organisation GitHub fires the schedule about every 2 to 4 hours, not every 15 minutes or every hour (the Owner, 2026-10-22, #66). Its Actions run records from 2026-10-17 to 2026-10-19T12:10Z show the poll firing 9 times in the 23 hours to 08:45Z on 2026-10-19, against about 100 ticks a day, at gaps of 2 to 4 hours, and the hourly callers about every 3.5 hours: the janitor 7 times where 24 were due. The nightly may start hours late, or not on that day at all. Every caller fired at the same instants, so the delay is GitHub's scheduler, which documents that a scheduled workflow can be delayed or dropped under load. The schedule is best effort, and no workflow works around it: the crons stay as they are.
+
+The gate still holds. Kanon promotes a candidate only once its `kanon-e2e` check run exists ([below](#what-kanons-gate-reads)), so a late poll delays that check run, hours after the candidate is cut rather than minutes, and never lets a candidate through without one. The 72-hour soak before promotion dwarfs a delay of hours. The sizing above is unchanged: a late nightly is still one run at a time, and a late janitor deletes the same repositories a few hours later.
 
 ## What Kanon's gate reads
 
