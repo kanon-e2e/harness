@@ -144,6 +144,15 @@ describe('refuse-deploy-ci-red: plan 0010\'s deploy gate refuses a release whose
     expect(s.phases[0].act.slice(0, 5)).toEqual(setup);
   });
 
+  it('runs with no default-branch ruleset, as its README says: repo.apply never sets firstCommit, as in the rehearsal (#138)', () => {
+    const applies = s.ofVerb('repo.apply');
+    expect(applies.length).toBeGreaterThan(0);
+    for (const a of applies) expect(a.firstCommit).toBeUndefined();
+    const readme = s.read('README.md');
+    expect(readme).toContain('no default-branch ruleset');
+    expect(readme).not.toMatch(/the default branch's ruleset|the ruleset requires/);
+  });
+
   it('keeps the rehearsal\'s start tree, and adds only the project\'s CI, its tests and what they test', () => {
     const mine = files(join(s.dir, 'start'));
     const theirs = files(join(rehearsal.dir, 'start'));
