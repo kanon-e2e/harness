@@ -221,7 +221,7 @@ describe('a write is looked up before it is asked again (#130, the Owner 2026-10
     "error: RPC failed; curl 7 Couldn't connect to server",
   ];
 
-  it('a write with no lookup refused for a rate limit is asked again after a minute, up to three times (#137)', async () => {
+  it('a write with no lookup refused for a rate limit is asked once more, after a minute, and that answer is the call\'s (#137)', async () => {
     const clock = fakeClock();
     const { gh, seen } = scripted(RATE_LIMITED, OK({}));
     expect(await retrying(gh, clock)(POST, '{}')).toEqual(OK({}));
@@ -230,17 +230,23 @@ describe('a write is looked up before it is asked again (#130, the Owner 2026-10
     const always = scripted(RATE_LIMITED);
     const slow = fakeClock();
     expect(await retrying(always.gh, slow)(POST, '{}')).toEqual(RATE_LIMITED);
-    expect(always.seen).toHaveLength(4);
-    expect(slow.sleeps).toEqual([60_000, 60_000, 60_000]);
+    expect(always.seen).toHaveLength(2);
+    expect(slow.sleeps).toEqual([60_000]);
   });
 
-  it('a write with no lookup whose connection was never made is asked again, backing off (#137)', async () => {
+  it('a write with no lookup whose connection was never made is asked once more, after 2 seconds, and that answer is the call\'s (#137)', async () => {
     for (const stderr of UNREACHED) {
       const clock = fakeClock();
       const { gh, seen } = scripted({ status: 1, stdout: '', stderr }, OK({}));
       expect(await retrying(gh, clock)(POST, '{}'), stderr).toEqual(OK({}));
       expect(seen, stderr).toHaveLength(2);
       expect(clock.sleeps, stderr).toEqual([2000]);
+      const refused = { status: 1, stdout: '', stderr };
+      const always = scripted(refused);
+      const twice = fakeClock();
+      expect(await retrying(always.gh, twice)(POST, '{}'), stderr).toEqual(refused);
+      expect(always.seen, stderr).toHaveLength(2);
+      expect(twice.sleeps, stderr).toEqual([2000]);
     }
   });
 

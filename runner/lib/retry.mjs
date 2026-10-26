@@ -1,7 +1,7 @@
 // Retries and classification (Kanon plan 0012 §10). A call to GitHub, by `gh` or by `git`, that
 // fails on a 5xx, a rate limit, a network error or GitHub's own failure to answer is retried, up
 // to three times, backing off; a write only after a lookup says its first attempt didn't land
-// (#130), or, with no lookup, only while GitHub can't have acted on it (#137). A false
+// (#130), or, with no lookup, once more when GitHub can't have acted on it (#137). A false
 // expectation never is: it is the finding. What is left after the retries is `infra`, as is a
 // token that no longer works (401). Anything else that isn't a `Fail` is the harness's own error,
 // and reads `fail`, so a broken runner is never mistaken for a quiet infrastructure day.
@@ -72,9 +72,10 @@ export const isWrite = (args, input) => {
  * 2026-10-25, #130): its caller passes `{ landed }`, which reads GitHub (the pull request for the
  * head, the issue, the label, the milestone, the ruleset) and answers `{ answer }`, what the write
  * would have answered, or null. Found, that answer is the call's, and nothing is asked again. A
- * write with no lookup is asked again only while GitHub can't have acted on it, a rate limit or a
- * connection never made (the Owner, 2026-10-26, #137); any other failure comes back as it is, and
- * reads `infra`.
+ * write with no lookup is asked once more when GitHub can't have acted on it, a rate limit (after
+ * a minute) or a connection never made (after 2 seconds), and that second answer is the call's,
+ * whatever it is (the Owner, 2026-10-26, #137); any other failure comes back as it is, and reads
+ * `infra`.
  * @template {(args: string[], input?: string, opts?: { landed?: () => Promise<{ answer: any } | null> }) => Promise<{ status: number, stdout: string, stderr: string }>} G
  * @param {G} gh @param {{ sleep: (ms: number) => Promise<void> }} clock
  * @returns {G}
@@ -82,7 +83,7 @@ export const isWrite = (args, input) => {
 export const retrying = (gh, clock) => /** @type {G} */ ((args, input, opts) => {
   if (!isWrite(args, input)) return again(() => gh(args, input), clock);
   const landed = opts?.landed;
-  if (!landed) return again(() => gh(args, input, opts), clock, undefined, isUnreached);
+  if (!landed) return again(() => gh(args, input, opts), clock, undefined, isUnreached, 1);
   return again(() => gh(args, input, opts), clock, async () => {
     const found = await landed();
     return found ? { status: 0, stdout: found.answer == null ? '' : JSON.stringify(found.answer), stderr: '' } : null;
@@ -90,16 +91,17 @@ export const retrying = (gh, clock) => /** @type {G} */ ((args, input, opts) => 
 });
 
 /**
- * Asks `call` until it answers other than `retryable`, up to three more times, backing off. Before
- * each time again, `look` may answer in its place.
+ * Asks `call` until it answers other than `retryable`, up to `retries` more times (three unless
+ * said), backing off. Before each time again, `look` may answer in its place.
  * @param {() => Promise<{ status: number, stdout: string, stderr: string }>} call
  * @param {{ sleep: (ms: number) => Promise<void> }} clock
  * @param {() => Promise<{ status: number, stdout: string, stderr: string } | null>} [look]
  * @param {(r: { status: number, stderr?: string }) => boolean} [retryable]
+ * @param {number} [retries]
  */
-const again = async (call, { sleep }, look, retryable = isRetryable) => {
+const again = async (call, { sleep }, look, retryable = isRetryable, retries = RETRIES) => {
   let r = await call();
-  for (let i = 0; i < RETRIES && retryable(r); i++) {
+  for (let i = 0; i < retries && retryable(r); i++) {
     await sleep(RATE.test(String(r.stderr)) ? RATE_LIMIT_WAIT_MS : FIRST_BACKOFF_MS * 2 ** i);
     const found = look ? await look() : null;
     if (found) return found;
