@@ -22,7 +22,7 @@ import { lstatSync, readdirSync, readFileSync } from 'node:fs';
 import { basename, join, relative } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-import { BRANCH, DEADLINE, bool, checkArgs, int, map, str, strs } from './lib/args.mjs';
+import { BRANCH, DEADLINE, WORKFLOW, bool, checkArgs, int, map, str, strs } from './lib/args.mjs';
 import { SUBSTITUTION, strangers } from './lib/substitute.mjs';
 import { VOCABULARY } from './vocabulary.mjs';
 
@@ -46,6 +46,13 @@ export const SCENARIO_FIELDS = Object.freeze({
   // `head`, in a job of its own (`author-label`, docs/jobs.md), as an adopter's Implementer labels
   // its own pull request. Only a real-model scenario takes it.
   authorLabel: map(),
+  // Optional (#123): after phase 1, the test Author dispatches `workflow` on the default branch, in
+  // a job of its own (`author-dispatch`, docs/jobs.md), so a lane whose gate admits only a member or
+  // a registered App on a dispatch (K-AGENT-45) starts. Only a real-model scenario takes it.
+  authorDispatch: map(),
+  // Optional (#123): `provision` stores a fixed, never-valid Slack webhook URL as the scenario
+  // repository's `KANON_CHAT_PROJECT_DIGEST`, so the project digest's `notify` job posts to a dead hook.
+  chatPlaceholder: bool(),
   // Optional (#139): the kinds of run the scenario takes part in, `plan` keeping it out of every
   // other kind. Left out, it is every kind. A `select=<id>` dispatch runs it whatever it says.
   runsOn: strs({ nonEmpty: true, items: { enum: [...RUN_KINDS] } }),
@@ -79,6 +86,13 @@ export function validateScenarioJson(s, dirName) {
     if (typeof a.label === 'string' && !AUTHOR_LABEL.test(a.label)) p.push(`\`authorLabel.label\` \`${a.label}\` must match ${AUTHOR_LABEL}`);
     if (!(Array.isArray(o.apps) && o.apps.includes('author'))) p.push('`authorLabel` has the Author apply the label, and `apps` doesn\'t list `author`');
     if (o.claude !== 'subscription') p.push('`authorLabel` is for a real-model scenario (`claude: subscription`): only a model lane needs an admitted identity to start it');
+  }
+  if (isObject(o.authorDispatch)) {
+    const a = /** @type {Record<string, unknown>} */ (o.authorDispatch);
+    if (Object.keys(a).join() !== 'workflow') p.push('`authorDispatch` holds exactly `workflow`');
+    if (typeof a.workflow !== 'string' || !WORKFLOW.test(a.workflow)) p.push(`\`authorDispatch.workflow\` ${JSON.stringify(a.workflow)} is not a workflow's file name`);
+    if (!(Array.isArray(o.apps) && o.apps.includes('author'))) p.push('`authorDispatch` has the Author dispatch the workflow, and `apps` doesn\'t list `author`');
+    if (o.claude !== 'subscription') p.push('`authorDispatch` is for a real-model scenario (`claude: subscription`): the run\'s sizing counts the Author\'s jobs only for real-model scenarios');
   }
   if (o.gate === true && Array.isArray(o.runsOn) && !o.runsOn.includes('candidate')) p.push('`gate: true` gates a candidate, and `runsOn` leaves out `candidate`: the candidate\'s run would never hold the scenario');
   return p;
@@ -252,6 +266,12 @@ export function validateScenarioDir(dir) {
       const opens = (steps.value.phases[0]?.act ?? []).some((/** @type {any} */ s) => s?.verb === 'pr.open' && s.head === label.head);
       if (!opens) p.push(`steps.json: \`authorLabel\` labels the pull request from \`${label.head}\` after phase 1, and phase 1's \`act\` segment opens none from it`);
       if (steps.value.phases.length < 2) p.push('steps.json: `authorLabel` runs between phase 1 and phase 2, so the scenario needs a phase 2 to see what the label started');
+    }
+    if (scenario.value?.authorDispatch && typeof scenario.value.authorDispatch === 'object' && Array.isArray(steps.value?.phases) && steps.value.phases.length < 2) {
+      p.push('steps.json: `authorDispatch` runs between phase 1 and phase 2, so the scenario needs a phase 2 to see the run it started');
+    }
+    if (scenario.value?.authorDispatch && typeof scenario.value.authorDispatch === 'object' && !verbs.includes('"register.write"')) {
+      p.push('steps.json: `authorDispatch` needs the Author in the App register, the one place a lane\'s gate admits an App from, and no step runs `register.write`');
     }
     if (verbs.includes('"register.write"') && Array.isArray(scenario.value?.apps) && scenario.value.apps.length === 0) {
       p.push('steps.json: `register.write` writes the rows of the scenario\'s test Apps, and scenario.json\'s `apps` names none');

@@ -27,10 +27,10 @@ Kanon's plan 0012 step E12, the gate refusals (§6.1): the lanes' own admission 
 | Phase | Job | Step | What it expects |
 |---|---|---|---|
 | 1 | `kanon` | `kanon.init` with the flags above, then `register.write`: the App register's rows for `judge` and `releaser` | |
-| 1 | `act` | `files.commit` from the `kanon` job, `repo.apply`, `environment.create` for `staging` and for `production` with its reviewer, `ruleset.tags`: the rehearsal's setup | |
+| 1 | `act` | `files.commit` from the `kanon` job, `repo.apply`, `environment.create` for `staging` and for `production` with its reviewer, `ruleset.tags`: the rehearsal's setup, with no default-branch ruleset, since `repo.apply` sets no `firstCommit` | |
 | 1 | `act` | `run.await` for `ci.yml`'s push run on the install | |
 | 1 | `act` | `expect.run` | `success`, with `Lane check` and `Tests` `success`: CI is green before the change, so the red that follows is the change's. |
-| 2 | `act` | `files.commit` of `regression/` on the branch `regression`, `pr.open`, `pr.merge` through the front door | It merges: the ruleset requires no check yet, as in the rehearsal. |
+| 2 | `act` | `files.commit` of `regression/` on the branch `regression`, `pr.open`, `pr.merge` through the front door | It merges: no default-branch ruleset exists, so no check is required, as in [the rehearsal](../deploy-rehearsal/README.md#what-the-repository-holds). |
 | 2 | `act` | `release.cut` | release-please's pull request merges, and the Releaser publishes `v0.1.0`, which starts `deploy.yml`. |
 | 3 | `act` | `run.await` for `ci.yml`'s push run on the default branch's head, the release's commit | |
 | 3 | `act` | `expect.run` | **The red CI:** `failure`, with `Lane check` `success` and `Tests` `failure`. |
@@ -46,7 +46,7 @@ Kanon's plan 0012 step E12, the gate refusals (§6.1): the lanes' own admission 
 
 One public repository in `kanon-e2e`, `e2e-refuse-deploy-ci-red-<run>-<attempt>`, holding the following:
 
-- the two environments, the tag ruleset and the default branch's ruleset;
+- the two environments and the tag ruleset (and no default-branch ruleset);
 - one Release, `v0.1.0`, and its tag, and the moved `v0` tag;
 - staging's issue;
 - the runs of `ci.yml` (green, then red), of the release workflow, and the deploy lane's refused run.

@@ -35,9 +35,10 @@ describe('the longest running time, waves included (§5.2)', () => {
     expect(longestRunningMinutes(2)).toBe(220);
     // §5.2 counts its 200 as three 50-minute phases plus 50 minutes of provision, the model-key
     // pair and the six phase mints. The gates before phases 2 and 3 run once each, not in waves.
-    // The Author's label pair (E10) adds its 10, in the real-model scenarios' waves.
+    // The Author's label pair (E10) adds its 10, in the real-model scenarios' waves. The Author's
+    // dispatch pair (#123) runs beside it after gate-2, so it adds nothing while it is no longer.
     const m = stageMinutes();
-    expect(m).toEqual({ provision: 10, modelKey: 10, authorLabel: 10, kanon: 25, act: 35, gate: 5 });
+    expect(m).toEqual({ provision: 10, modelKey: 10, authorLabel: 10, authorDispatch: 10, kanon: 25, act: 35, gate: 5 });
   });
 
   it('grows with the waves a lower max-parallel makes', () => {

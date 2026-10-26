@@ -94,19 +94,24 @@ export function fitCap(catalogue, cap, day) {
   return { planned: catalogue.filter((s) => s.gate === true || picked.has(s.id)), left: free.filter((s) => !picked.has(s.id)).map((s) => s.id) };
 }
 
-/** What a scenario job takes of a scenario, and `verdict` its `gate`, from the catalogue at the run's commit. @param {any} s */
-const entry = (s) => ({ id: s.id, apps: s.apps, claude: s.claude, gate: s.gate === true });
+/**
+ * What a scenario job takes of a scenario, and `verdict` its `gate`, from the catalogue at the run's
+ * commit. `chatPlaceholder` only where scenario.json sets it, for `provision`'s dead-webhook step (#123).
+ * @param {any} s
+ */
+const entry = (s) => ({ id: s.id, apps: s.apps, claude: s.claude, gate: s.gate === true, ...(s.chatPlaceholder === true ? { chatPlaceholder: true } : {}) });
 
 /**
  * `authorLabels` is the planned scenarios whose `authorLabel` the `author-label` job applies after
- * phase 1, for its matrix. `left` is the `gate: false` scenarios the cap left out of this run, by
+ * phase 1, for its matrix; `authorDispatches` those whose `authorDispatch` the `author-dispatch` job
+ * dispatches after phase 1, for its (#123). `left` is the `gate: false` scenarios the cap left out of this run, by
  * id; `skipped` is the scenarios the ledger refused for their cost, and the gating ones it refused for any reason (#107), each with its `skipped` word, for `verdict`;
  * `ledger` is every real-model scenario's admission or refusal, with its reason.
- * @typedef {{ go: boolean, trigger: string, release: string, candidateSha: string, scenarios: any[], modelScenarios: any[], authorLabels: Array<{ id: string, head: string, label: string }>, left: string[], skipped: any[], ledger: Array<{ id: string, started: boolean, reason: string }>, marker: string, reason: string }} Decision
+ * @typedef {{ go: boolean, trigger: string, release: string, candidateSha: string, scenarios: any[], modelScenarios: any[], authorLabels: Array<{ id: string, head: string, label: string }>, authorDispatches: Array<{ id: string, workflow: string }>, left: string[], skipped: any[], ledger: Array<{ id: string, started: boolean, reason: string }>, marker: string, reason: string }} Decision
  */
 
 /** A run that doesn't go ahead. @param {string} trigger @param {string} reason @param {Decision['ledger']} [ledger] @returns {Decision} */
-const stop = (trigger, reason, ledger = []) => ({ go: false, trigger, release: '', candidateSha: '', scenarios: [], modelScenarios: [], authorLabels: [], left: [], skipped: [], ledger, marker: '', reason });
+const stop = (trigger, reason, ledger = []) => ({ go: false, trigger, release: '', candidateSha: '', scenarios: [], modelScenarios: [], authorLabels: [], authorDispatches: [], left: [], skipped: [], ledger, marker: '', reason });
 
 /**
  * Decides the run.
@@ -210,6 +215,7 @@ export async function decide(input, deps) {
       go: true, trigger, candidateSha: '', ...d, reason: `${d.reason ?? ''}${note}`, scenarios, ledger, left,
       modelScenarios: scenarios.filter(isModel),
       authorLabels: chosen.filter((s) => !refusedIds.has(s.id) && s.authorLabel).map((s) => ({ id: s.id, head: s.authorLabel.head, label: s.authorLabel.label })),
+      authorDispatches: chosen.filter((s) => !refusedIds.has(s.id) && s.authorDispatch).map((s) => ({ id: s.id, workflow: s.authorDispatch.workflow })),
       skipped: refused.filter((r) => r.skipped).map((r) => ({ id: r.id, gate: r.gate, skipped: r.skipped })),
     });
   };
@@ -276,7 +282,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   }, { gh: ghProcess(env), now: Date.now });
   const out = [
     `go=${d.go}`, `trigger=${d.trigger}`, `release=${d.release}`, `candidate-sha=${d.candidateSha}`,
-    `scenarios=${JSON.stringify(d.scenarios)}`, `model-scenarios=${JSON.stringify(d.modelScenarios)}`, `author-labels=${JSON.stringify(d.authorLabels)}`, `skipped=${JSON.stringify(d.skipped)}`, `marker=${d.marker}`, `reason=${d.reason.replace(/\s+/g, ' ')}`,
+    `scenarios=${JSON.stringify(d.scenarios)}`, `model-scenarios=${JSON.stringify(d.modelScenarios)}`, `author-labels=${JSON.stringify(d.authorLabels)}`, `author-dispatches=${JSON.stringify(d.authorDispatches)}`, `skipped=${JSON.stringify(d.skipped)}`, `marker=${d.marker}`, `reason=${d.reason.replace(/\s+/g, ' ')}`,
   ];
   if (env.GITHUB_OUTPUT) appendFileSync(env.GITHUB_OUTPUT, `${out.join('\n')}\n`);
   if (d.go && env.MARKER_DIR) {

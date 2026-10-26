@@ -1,0 +1,12 @@
+{
+  "id": "notify-revoked",
+  "family": "lane",
+  "tier": "model",
+  "gate": false,
+  "apps": ["author", "judge"],
+  "claude": "subscription",
+  "deadlineMinutes": 120,
+  "runsOn": ["candidate", "dispatch"],
+  "chatPlaceholder": true,
+  "authorDispatch": { "workflow": "agent-project-digest.yml" }
+}

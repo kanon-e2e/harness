@@ -1,0 +1,75 @@
+# e2e — the Author's dispatch: mint, then the job (harness #123; the Owner, 2026-10-25)
+#
+# CALLED ONLY BY `e2e.yml`'s `author-dispatch`, after phase 1, once for each scenario whose
+# scenario.json names an `authorDispatch`. A lane's membership gate admits a dispatch only by a
+# member or a registered agent App (Kanon's `scripts/lane-gate.mjs`, K-AGENT-45), and the driver is
+# neither. So the test Author, which the scenario's App register names, dispatches the workflow, as
+# an adopter's member runs it by hand. The same spine as the other pairs:
+#   • `mint` holds the Author's key and runs nothing else. It mints a token scoped to the one
+#     scenario repository with Actions write, which a dispatch takes, and nothing more.
+#     docs/jobs.md names what a leak of it can do.
+#   • `job` is `e2e-author-dispatch-job.yml`, one job, handed the token and nothing else: `gh`
+#     dispatches the workflow, and the token is revoked. No checkout, no harness code, no Kanon
+#     code (K-AGENT-50).
+# THE PLAN CHANGES HERE (§5.2, §11): the test Apps' keys are read by `provision`, by
+# `e2e-author-label-run.yml`'s `mint`, and by this `mint`. This one reads only the Author's.
+name: e2e — the Author's dispatch (mint, then the job)
+
+on:
+  workflow_call:
+    inputs:
+      repository-name:
+        description: The scenario repository's name in the test organisation
+        required: true
+        type: string
+      workflow:
+        description: The scenario repository's workflow file the Author dispatches, on its default branch
+        required: true
+        type: string
+    secrets:
+      AUTHOR_APP_ID:
+        required: true
+      AUTHOR_APP_KEY:
+        required: true
+
+jobs:
+  # HOLDS THE KEY, AND ONLY THE MINT.
+  mint:
+    name: mint (Actions write, as the Author)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    environment: e2e
+    permissions: {}
+    outputs:
+      sealed: ${{ steps.seal.outputs.sealed }}
+      # The attempt this token was minted for. A partial re-run reuses this job's outputs.
+      attempt: ${{ github.run_attempt }}
+    steps:
+      - name: Mint the Author's token for the scenario repository
+        id: app-token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ secrets.AUTHOR_APP_ID }}
+          private-key: ${{ secrets.AUTHOR_APP_KEY }}
+          owner: kanon-e2e
+          repositories: ${{ inputs.repository-name }}
+          # The job revokes it when it ends. The default would revoke it as THIS job ends.
+          skip-token-revoke: "true"
+          permission-actions: write
+      - name: Seal the token for the job
+        id: seal
+        env:
+          TOKEN: ${{ steps.app-token.outputs.token }}
+        run: printf 'sealed=%s\n' "$(printf %s "$TOKEN" | od -An -v -tx1 | tr -d ' \n')" >> "$GITHUB_OUTPUT"
+
+  # THE JOB, GIVEN THE TOKEN AND NEVER THE KEY.
+  job:
+    needs: mint
+    if: ${{ !cancelled() }}
+    uses: ./.github/workflows/e2e-author-dispatch-job.yml
+    with:
+      repository-name: ${{ inputs.repository-name }}
+      workflow: ${{ inputs.workflow }}
+      mint-attempt: ${{ needs.mint.outputs.attempt }}
+    secrets:
+      app-token: ${{ needs.mint.outputs.sealed }}
