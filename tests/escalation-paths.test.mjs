@@ -86,6 +86,12 @@ const GUARD_HELPERS = importedBy(GUARDS);
  * `CONFIG_EXTENSIONS`).
  */
 const VITEST_CONFIG = ['vitest.config', 'vite.config'].flatMap((name) => ['.ts', '.mts', '.cts', '.js', '.mjs', '.cjs'].map((ext) => name + ext));
+/**
+ * The project `.npmrc` npm reads at the repository root, which decides how `npm ci` and `npm test`
+ * run in the `Tests` check: its `script-shell` or `node-options` could make that check green
+ * without running the guard tests (#128).
+ */
+const NPMRC = ['.npmrc'];
 /** Every workflow that names an environment reads that environment's keys. */
 const ENVIRONMENT_READERS = [...new Set(environmentJobs(readWorkflows()).map(({ file }) => `.github/workflows/${file}`))];
 
@@ -125,6 +131,10 @@ describe('the escalation paths keep what runs with the driver key the Owner\'s',
 
   it('marks every root Vitest configuration `always`, which could exclude a guard test', () => {
     expect(notAlways(entries, VITEST_CONFIG)).toEqual([]);
+  });
+
+  it('marks a root `.npmrc` `always`, which decides how npm runs the `Tests` check', () => {
+    expect(notAlways(entries, NPMRC)).toEqual([]);
   });
 
   it('leaves the other tests and their shared stubs green', () => {

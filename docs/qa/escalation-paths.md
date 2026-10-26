@@ -19,6 +19,7 @@ The escalation test, `tests/escalation-paths.test.mjs`, holds each of these patt
 - `^tests/(?:workflows|escalation-paths)\.test\.mjs$` `pipeline` `always` — the guard tests: the workflow test holds the workflows that hold the driver's key, and the escalation test holds this list, so loosening either is as much the Owner's as loosening what it guards (#13)
 - `^tests/helpers/workflows\.mjs$` `pipeline` `always` — the helper the guard tests import, which reads the workflows they check; the escalation test fails on a helper they import that no pattern covers (#13)
 - `^vite(?:st)?\.config\.[^/]+$` `pipeline` `always` — a root Vitest configuration, `vitest.config.*` or the `vite.config.*` Vitest reads without one, which could exclude a guard test from the `Tests` check (#13)
+- `^\.npmrc$` `pipeline` `always` — a root `.npmrc`, which decides how `npm ci` and `npm test` run the `Tests` check: its `script-shell` or `node-options` could make that check green without running the guard tests (#128)
 
 Every workflow that reads an environment's key is named `e2e*.yml`, so the workflow pattern above covers it. E0's `probe-*.yml` workflows read the keys too, and had a pattern of their own until they were retired (#7, probes/README.md). The escalation test reads every workflow that names an environment and fails on one no pattern covers: name such a workflow to match, or add its pattern here.
 

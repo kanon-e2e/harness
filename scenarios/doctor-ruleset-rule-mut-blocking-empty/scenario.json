@@ -1,0 +1,14 @@
+{
+  "id": "doctor-ruleset-rule-mut-blocking-empty",
+  "family": "doctor",
+  "tier": "none",
+  "gate": false,
+  "apps": [
+    "judge"
+  ],
+  "claude": "none",
+  "deadlineMinutes": 60,
+  "runsOn": [
+    "dispatch"
+  ]
+}
