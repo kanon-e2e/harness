@@ -547,9 +547,8 @@ describe('`runsOn`: a scenario takes part only in the kinds of run it names (#13
   it('leaving `runsOn` out is every kind of run: no existing scenario changes', async () => {
     const { scenarioDirs, loadScenario } = await import('../runner/validate.mjs');
     const all = scenarioDirs().map((d) => loadScenario(d).scenario);
-    // Only notify-revoked names it (#123), beside the TEMPORARY E12 mutation copies (`*-mut-*`,
-    // `runsOn: ["dispatch"]`, deleted after their one dispatch); every other scenario leaves it out.
-    expect(all.filter((s) => 'runsOn' in s && !/-mut-/.test(s.id)).map((s) => s.id)).toEqual(['notify-revoked']);
+    // Only notify-revoked names it (#123); every other scenario leaves it out, and plans as before.
+    expect(all.filter((s) => 'runsOn' in s).map((s) => s.id)).toEqual(['notify-revoked']);
     const catalogue = all.filter((s) => !('runsOn' in s));
     const every = catalogue.map((s) => ({ ...s, runsOn: ['candidate', 'dispatch', 'scheduled'] }));
     for (const input of [{ event: 'schedule', schedule: POLL }, { event: 'schedule', schedule: NIGHTLY }, { event: 'workflow_dispatch', release: 'v0.41.0' }, { event: 'workflow_dispatch', release: 'candidate-v0.42.0' }, { event: 'workflow_dispatch', release: 'v0.41.0', select: 'install' }]) {
