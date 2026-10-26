@@ -524,11 +524,8 @@ describe('`runsOn`: a scenario takes part only in the kinds of run it names (#13
 
   it('leaving `runsOn` out is every kind of run: no existing scenario changes', async () => {
     const { scenarioDirs, loadScenario } = await import('../runner/validate.mjs');
-    // TEMPORARY: the E12 mutation copies (`*-mut-*`) take `runsOn: ["dispatch"]`, and are deleted
-    // after their one dispatch; every other scenario still leaves `runsOn` out.
-    const all = scenarioDirs().map((d) => loadScenario(d).scenario);
-    expect(all.filter((s) => 'runsOn' in s).map((s) => s.id).every((id) => /-mut-/.test(id))).toBe(true);
-    const catalogue = all.filter((s) => !('runsOn' in s));
+    const catalogue = scenarioDirs().map((d) => loadScenario(d).scenario);
+    expect(catalogue.some((s) => 'runsOn' in s)).toBe(false);
     const every = catalogue.map((s) => ({ ...s, runsOn: ['candidate', 'dispatch', 'scheduled'] }));
     for (const input of [{ event: 'schedule', schedule: POLL }, { event: 'schedule', schedule: NIGHTLY }, { event: 'workflow_dispatch', release: 'v0.41.0' }, { event: 'workflow_dispatch', release: 'candidate-v0.42.0' }, { event: 'workflow_dispatch', release: 'v0.41.0', select: 'install' }]) {
       const [a, b] = [await plan({ ...input, catalogue }, world()), await plan({ ...input, catalogue: every }, world())];
