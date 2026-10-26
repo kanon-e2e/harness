@@ -567,6 +567,19 @@ describe('workflow.dispatch', () => {
     await run('workflow.dispatch', { workflow: 'apps-check.yml', inputs: { reason: 'scenario' } }, context({ gh: g.gh }));
     expect(g.writes()[0].body).toEqual({ ref: 'main', inputs: { reason: 'scenario' } });
   });
+
+  it('a dispatch GitHub refused for a rate limit is asked again; one answered with a 502 is asked once and reads `infra` (#137)', async () => {
+    const POST = `POST repos/${REPO}/actions/workflows/apps-check.yml/dispatches`;
+    const sleeps = [];
+    const limited = stubGh({ [POST]: inTurn(fail('gh: You have exceeded a secondary rate limit. (HTTP 403)'), undefined) });
+    await run('workflow.dispatch', { workflow: 'apps-check.yml' }, context({ gh: retrying(limited.gh, { sleep: async (ms) => { sleeps.push(ms); } }) }));
+    expect(limited.calls.filter((c) => c.key === POST)).toHaveLength(2);
+    expect(sleeps).toEqual([60_000]);
+    const bad = stubGh({ [POST]: inTurn(fail('gh: HTTP 502: Bad Gateway'), undefined) });
+    const e = await run('workflow.dispatch', { workflow: 'apps-check.yml' }, context({ gh: retrying(bad.gh, { sleep: async () => {} }) })).catch((x) => x);
+    expect(classify(e)).toBe('infra');
+    expect(bad.calls.filter((c) => c.key === POST)).toHaveLength(1);
+  });
 });
 
 describe('release.cut', () => {

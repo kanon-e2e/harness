@@ -208,6 +208,76 @@ describe('a write is looked up before it is asked again (#130, the Owner 2026-10
     expect(classify(Object.assign(new Error('x'), { stderr: r.stderr }))).toBe('infra');
   });
 
+  // GitHub refused these before acting, or the request never reached it (#137, the Owner 2026-10-26).
+  const RATE_LIMITED = { status: 1, stdout: '', stderr: 'gh: You have exceeded a secondary rate limit. Please wait a few minutes before you try again. (HTTP 403)' };
+  const UNREACHED = [
+    'Post "https://api.github.com/repos/o/r/actions/workflows/x.yml/dispatches": dial tcp 140.82.112.6:443: connect: connection refused',
+    'error connecting to api.github.com\ncheck your internet connection or https://githubstatus.com',
+    'Post "https://api.github.com/repos/o/r/actions/runs/7/cancel": dial tcp: lookup api.github.com: no such host',
+    'Post "https://api.github.com/repos/o/r/actions/runs/7/cancel": dial tcp: lookup api.github.com on 127.0.0.53:53: Temporary failure in name resolution',
+    'Post "https://api.github.com/repos/o/r/actions/runs/7/cancel": dial tcp [2606:50c0::1]:443: connect: network is unreachable',
+    "fatal: unable to access 'https://github.com/o/r.git/': Could not resolve host: github.com",
+    "fatal: unable to access 'https://github.com/o/r.git/': Failed to connect to github.com port 443: Connection timed out",
+    "error: RPC failed; curl 7 Couldn't connect to server",
+  ];
+
+  it('a write with no lookup refused for a rate limit is asked again after a minute, up to three times (#137)', async () => {
+    const clock = fakeClock();
+    const { gh, seen } = scripted(RATE_LIMITED, OK({}));
+    expect(await retrying(gh, clock)(POST, '{}')).toEqual(OK({}));
+    expect(seen).toHaveLength(2);
+    expect(clock.sleeps).toEqual([60_000]);
+    const always = scripted(RATE_LIMITED);
+    const slow = fakeClock();
+    expect(await retrying(always.gh, slow)(POST, '{}')).toEqual(RATE_LIMITED);
+    expect(always.seen).toHaveLength(4);
+    expect(slow.sleeps).toEqual([60_000, 60_000, 60_000]);
+  });
+
+  it('a write with no lookup whose connection was never made is asked again, backing off (#137)', async () => {
+    for (const stderr of UNREACHED) {
+      const clock = fakeClock();
+      const { gh, seen } = scripted({ status: 1, stdout: '', stderr }, OK({}));
+      expect(await retrying(gh, clock)(POST, '{}'), stderr).toEqual(OK({}));
+      expect(seen, stderr).toHaveLength(2);
+      expect(clock.sleeps, stderr).toEqual([2000]);
+    }
+  });
+
+  it('a write with no lookup that may have reached GitHub is still asked once: a 5xx, a reset, a timeout, an EOF, a cut-off answer, an unreachable network on a made connection (#137)', async () => {
+    for (const stderr of [
+      'gh: HTTP 502: Bad Gateway',
+      'Post "https://api.github.com/repos/o/r/actions/runs/7/cancel": read tcp 10.1.0.4:5000->140.82.112.6:443: read: connection reset by peer',
+      'Post "https://api.github.com/repos/o/r/actions/runs/7/cancel": read tcp 10.1.0.4:5000->140.82.112.6:443: i/o timeout',
+      'Post "https://api.github.com/repos/o/r/actions/runs/7/cancel": net/http: TLS handshake timeout',
+      'Post "https://api.github.com/repos/o/r/actions/runs/7/cancel": EOF',
+      'unexpected end of JSON input',
+      'Post "https://api.github.com/repos/o/r/actions/runs/7/cancel": write tcp 10.1.0.4:5000->140.82.112.6:443: write: network is unreachable',
+    ]) {
+      expect(isRetryable({ status: 1, stderr }), stderr).toBe(true);
+      const { gh, seen } = scripted({ status: 1, stdout: '', stderr }, OK({}));
+      expect((await retrying(gh, fakeClock())(POST, '{}')).stderr, stderr).toBe(stderr);
+      expect(seen, stderr).toHaveLength(1);
+    }
+  });
+
+  it('a write with no lookup stops at the first failure that may have reached GitHub, after a rate limit or a refused connection (#137)', async () => {
+    for (const first of [RATE_LIMITED, { status: 1, stdout: '', stderr: UNREACHED[0] }]) {
+      const { gh, seen } = scripted(first, BAD, OK({}));
+      expect(await retrying(gh, fakeClock())(POST, '{}')).toEqual(BAD);
+      expect(seen).toHaveLength(2);
+    }
+  });
+
+  it('gh\'s own wording for a host it couldn\'t look up, "error connecting to", is a network error: retried, and `infra` (#137)', async () => {
+    const stderr = UNREACHED[1];
+    expect(isRetryable({ status: 1, stderr })).toBe(true);
+    expect(classify(Object.assign(new Error('x'), { stderr }))).toBe('infra');
+    const { gh, seen } = scripted({ status: 1, stdout: '', stderr });
+    await retrying(gh, fakeClock())(['api', 'repos/o/r']);
+    expect(seen).toHaveLength(4);
+  });
+
   it('a write whose first attempt landed: looked up after the backoff, never asked again, and the lookup\'s answer is the call\'s', async () => {
     const clock = fakeClock();
     const { gh, seen } = scripted(BAD, OK({ number: 6 }));
