@@ -157,6 +157,16 @@ process.stdout.write(JSON.stringify(r));
     expect(output).toBe(`scenarios=${JSON.stringify(['install-review', 'deploy-rehearsal'].map(entry))}\nauthor-labels=${JSON.stringify([labels[0]])}\n`);
   });
 
+  it('MUTATION: with AUTHOR_DISPATCHES, as gate-2 runs it, also writes the dispatches of the scenarios it kept, after the labels (#123)', () => {
+    const labels = [{ id: 'install-review', head: 'docs-note', label: 'review:please' }];
+    const dispatches = [{ id: 'install-review', workflow: 'agent-project-digest.yml' }, { id: 'install-build', workflow: 'agent-project-digest.yml' }];
+    const both = runGate(2, { 'install-build': { gone: true } }, { AUTHOR_LABELS: JSON.stringify(labels), AUTHOR_DISPATCHES: JSON.stringify(dispatches) });
+    expect(both.status).toBe(0);
+    expect(both.output).toBe(`scenarios=${JSON.stringify(['install-review', 'deploy-rehearsal'].map(entry))}\nauthor-labels=${JSON.stringify(labels)}\nauthor-dispatches=${JSON.stringify([dispatches[0]])}\n`);
+    const ended = runGate(2, { 'install-review': { gone: true }, 'install-build': standing(TOPIC.fail) }, { AUTHOR_DISPATCHES: JSON.stringify(dispatches) });
+    expect(ended.output).toBe(`scenarios=${JSON.stringify([entry('deploy-rehearsal')])}\nauthor-dispatches=[]\n`);
+  });
+
   it('refuses a phase that has no gate: 1, or past three', () => {
     for (const p of [1, 4, 'x']) expect(runGate(p).status, String(p)).not.toBe(0);
   });

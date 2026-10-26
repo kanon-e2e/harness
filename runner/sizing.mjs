@@ -43,6 +43,7 @@ export const stageMinutes = (s = SETTINGS) => ({
   provision: s.minutes.provision,
   modelKey: s.minutes.mint + s.minutes.modelKey,
   authorLabel: s.minutes.mint + s.minutes.authorLabel,
+  authorDispatch: s.minutes.mint + s.minutes.authorDispatch,
   kanon: s.minutes.mint + s.minutes.kanon,
   act: s.minutes.mint + s.minutes.act,
   gate: s.minutes.gate,
@@ -60,7 +61,8 @@ export const longestRunningMinutes = (n, s = SETTINGS) => {
   const m = stageMinutes(s);
   const w = waves(n, p);
   const wm = waves(Math.min(n, s.maxModelScenarios), p);
-  return w * m.provision + wm * (m.modelKey + m.authorLabel) + PHASES * w * (m.kanon + m.act) + (PHASES - 1) * m.gate;
+  // `author-label` and `author-dispatch` both run after `gate-2`, side by side: the longer counts.
+  return w * m.provision + wm * (m.modelKey + Math.max(m.authorLabel, m.authorDispatch)) + PHASES * w * (m.kanon + m.act) + (PHASES - 1) * m.gate;
 };
 
 /** The repositories one run of `n` scenarios creates: each, and its `infra` re-run. @param {number} n */
