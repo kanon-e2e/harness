@@ -57,7 +57,8 @@
           { "name": "release / gate", "conclusion": "success" },
           { "name": "release / probe", "conclusion": "success" },
           { "name": "release / build", "conclusion": "success" },
-          { "name": "staging / deploy", "conclusion": "failure" },
+          { "name": "staging / deploy", "conclusion": "success" },
+          { "name": "staging / verdict", "conclusion": "failure" },
           { "name": "staging / record", "conclusion": "success" },
           { "name": "staging / report", "conclusion": "success" }
         ] },

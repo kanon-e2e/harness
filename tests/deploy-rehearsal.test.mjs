@@ -137,7 +137,6 @@ describe('three releases, each with what it expects', () => {
     expect(read('smoke-fails/.github/actions/smoke/action.yml')).toMatch(/exit 1/);
     const run = ofVerb('expect.run').find((s) => s.run === 'release-2');
     expect(run.conclusion).toBe('failure');
-    expect(run.jobs).toContainEqual({ name: 'staging / deploy', conclusion: 'failure' });
     expect(run.jobs).toContainEqual({ name: 'staging / report', conclusion: 'success' });
     const [found] = ofVerb('issue.await');
     expect(found).toMatchObject({ name: 'staging-failed', author: 'github-actions', labels: ['bug', 'sev:medium'] });
@@ -145,6 +144,14 @@ describe('three releases, each with what it expects', () => {
     expect(at(found)).toBeLessThan(at(cuts[2]));
     const open = ofVerb('expect.issue').find((s) => s.state === 'open');
     expect(open).toMatchObject({ issue: 'staging-failed', labels: ['bug', 'sev:medium'] });
+  });
+
+  it('the second: the deploy job succeeds, since the hook did and the smoke check is continue-on-error, and the verdict job fails the call (Kanon 0.43.0, plan 0013 §7.1)', () => {
+    const run = ofVerb('expect.run').find((s) => s.run === 'release-2');
+    expect(run.jobs).toContainEqual({ name: 'staging / deploy', conclusion: 'success' });
+    expect(run.jobs).toContainEqual({ name: 'staging / verdict', conclusion: 'failure' });
+    expect(run.jobs.filter((j) => j.conclusion === 'failure').map((j) => j.name)).toEqual(['staging / verdict']);
+    expect(run.jobs.map((j) => j.name)).toEqual([...RELEASE_JOBS.slice(0, 3), ...envJobs('staging', 'deploy', 'verdict', 'record', 'report')]);
   });
 
   it('the third: its smoke check passes again, and its success closes that issue', () => {
