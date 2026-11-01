@@ -391,6 +391,14 @@ describe('the `kanon` and `act` jobs (§5.2)', () => {
     expect(job.steps.filter((s) => JSON.stringify(s).includes('E2E_CLAUDE_CODE_OAUTH_TOKEN'))).toEqual([job.steps[1]]);
     expect(job.steps[1].run).toMatch(/gh secret set CLAUDE_CODE_OAUTH_TOKEN/);
   });
+
+  // e2e-model held CLAUDE_CODE_OAUTH_TOKEN while the job read E2E_CLAUDE_CODE_OAUTH_TOKEN (#160).
+  it('MUTATION: docs/jobs.md\'s model-key row names the secret the job reads as what `e2e-model` must hold (#160)', () => {
+    const read = only(docs['e2e-model-key-job.yml']).steps[1].env.MODEL_TOKEN.match(/^\$\{\{ secrets\.(\w+) \}\}$/)[1];
+    const row = readFileSync('docs/jobs.md', 'utf8').split('\n').find((l) => l.startsWith('| `model-key` |'));
+    expect(row).toContain(`\`e2e-model\` must hold \`${read}\``);
+    expect(row).toMatch(/claude setup-token/);
+  });
 });
 
 describe('the janitor\'s workflow (§5.3)', () => {
