@@ -24,7 +24,7 @@ const DEPLOY_FINDINGS = [
   'deploy.ci-push-missing', 'deploy.declaration', 'deploy.declaration-moved', 'deploy.environment-missing',
   'deploy.hook-missing', 'deploy.reference-undeclared', 'deploy.releaser-missing', 'deploy.reviewers-missing',
   'deploy.secret-organization', 'deploy.secret-repository', 'deploy.self-review', 'deploy.subject-custom',
-  'deploy.tag-ruleset', 'deploy.trust-unproven',
+  'deploy.tag-ruleset', 'deploy.targets-missing', 'deploy.trust-unproven',
 ];
 
 /** The jobs a run of the deploy caller lists for an environment, and for the release. */
@@ -174,5 +174,17 @@ describe('doctor reports no deploy.* finding once the lane has run', () => {
   it('holds every deploy.* id absent, and expects none present', () => {
     expect([...expectation.absent].sort()).toEqual([...DEPLOY_FINDINGS].sort());
     expect((expectation.findings ?? []).filter((id) => id.startsWith('deploy.'))).toEqual([]);
+  });
+
+  // MUTATION (#167): Kanon 0.44.0's `deploy-targets` check lists the repository's variables. The
+  // scenario's doctor token reads them, so the check is judged, never allowed unchecked, and the
+  // variable is set, every declared environment named, so `deploy.targets-missing` is held absent.
+  it('judges deploy-targets: only the secrets checks may be unchecked, and the variable names both environments', () => {
+    expect([...expectation.unchecked].sort()).toEqual(['deploy-secrets', 'secrets']);
+    const scenario = JSON.parse(read('scenario.json'));
+    expect(Object.keys(scenario.deployTargets)).toEqual(['staging', 'production']);
+    expect(Object.values(scenario.deployTargets).every((r) => typeof r === 'string' && r.length > 0)).toBe(true);
+    const [init] = ofVerb('kanon.init');
+    expect(init.flags).toContain('--deploy-environments=staging,production');
   });
 });

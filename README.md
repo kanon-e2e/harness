@@ -33,6 +33,7 @@ scenarios/<scenario>/
 | `authorLabel` | Optional, for a `claude: subscription` scenario that lists `author`: `{ "head": <branch>, "label": <label> }`. After phase 1, the test Author applies the label to the open pull request from that branch, in `e2e.yml`'s `author-label` job, so a model lane's membership gate admits it ([`docs/jobs.md`](docs/jobs.md)). Phase 1 must open that pull request, and the scenario needs a phase 2. |
 | `authorDispatch` | Optional, for a `claude: subscription` scenario that lists `author`: `{ "workflow": <file name> }`. After phase 1, the test Author dispatches that workflow of the scenario repository on its default branch, in `e2e.yml`'s `author-dispatch` job, so a lane whose membership gate admits a dispatch only by a member or a registered App starts ([`docs/jobs.md`](docs/jobs.md)). The scenario needs a phase 2, and a `register.write` step, so the register names the Author (#123). |
 | `chatPlaceholder` | Optional, a boolean. With `true`, `provision` writes a fixed, never-valid Slack webhook URL as the scenario repository's `KANON_CHAT_PROJECT_DIGEST`, so the project digest's `notify` job posts to a dead hook ([`docs/jobs.md`](docs/jobs.md), #123). |
+| `deployTargets` | Optional, for a `deploy` scenario: an object of each declared environment's role identifier, such as `{ "staging": "…", "production": "…" }`. `provision` writes it, as JSON, as the scenario repository's `KANON_DEPLOY_TARGETS` variable, which Kanon's deploy caller maps into the lane and `kanon doctor` checks (`deploy.targets-missing`) ([`docs/jobs.md`](docs/jobs.md), #167). |
 | `runsOn` | Optional: the kinds of run the scenario takes part in, a non-empty list of `candidate`, `dispatch` and `scheduled` ([Runs](#runs)). Left out, it takes part in every kind, as every scenario did before it (#139). A `gate: true` scenario must list `candidate`. |
 
 **`start/`** is copied as it is, regular files only, with two substitutions and no others: `{{release}}`, the release under test, and `{{repository}}`, the scenario repository's `<owner>/<name>`. A workflow's `${{ … }}` is not a substitution, and a binary file is copied untouched.
@@ -68,7 +69,7 @@ Each scenario's own README says what it sets up, what each step expects, what it
 2. The second has a failing smoke check: the lane must file staging's issue.
 3. The third succeeds, and must close that issue.
 
-Doctor must report no `deploy.*` finding.
+Doctor must report no `deploy.*` finding. The repository's `KANON_DEPLOY_TARGETS` variable names both environments (`deployTargets`), and doctor's token reads variables, so its `deploy-targets` check is judged, never left `unchecked` (#167).
 
 On every run, a candidate's included, the scenario cancels the run at production's wait, and holds production's deploy job to ending `cancelled`: no person approves anything (decision 9, as the Owner amended it on 2026-10-20). Dispatch it on its own:
 

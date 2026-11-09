@@ -44,7 +44,7 @@
           "deploy.ci-push-missing", "deploy.declaration", "deploy.declaration-moved", "deploy.environment-missing",
           "deploy.hook-missing", "deploy.reference-undeclared", "deploy.releaser-missing", "deploy.reviewers-missing",
           "deploy.secret-organization", "deploy.secret-repository", "deploy.self-review", "deploy.subject-custom",
-          "deploy.tag-ruleset", "deploy.trust-unproven"
+          "deploy.tag-ruleset", "deploy.targets-missing", "deploy.trust-unproven"
         ] }
       ],
       "act": [
