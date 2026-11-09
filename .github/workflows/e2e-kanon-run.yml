@@ -6,8 +6,9 @@
 #     Kanon code. It mints a token scoped to the one scenario repository, READ-ONLY (decision
 #     23 (b)): Contents, Issues, Pull requests, Actions, Administration and Variables read; no
 #     Workflows, no Secrets, no write at all. Variables read is for doctor's `deploy-targets`
-#     check, which lists the repository's variables for `KANON_DEPLOY_TARGETS` (#167). It hands the token on hex-encoded, because GitHub drops a job
-#     output that holds a masked value, and skips the revoke, which the job does as it ends.
+#     check, which lists the repository's variables for `KANON_DEPLOY_TARGETS` (#167). It hands
+#     the token on hex-encoded, because GitHub drops a job output that holds a masked value, and
+#     skips the revoke, which the job does as it ends.
 #   • `job` is `e2e-kanon-job.yml`, handed the token and never the key. It runs Kanon's code at
 #     the release under test, which reaches only that token: whatever Kanon writes, it writes to
 #     its clone, and the `act` job pushes it.
@@ -70,7 +71,12 @@ jobs:
           permission-pull-requests: read
           permission-actions: read
           permission-administration: read
-          permission-variables: read
+        # VARIABLES, BY GITHUB'S NAME (#167): the permission is `actions_variables`, and the
+        # pinned action declares no input for it. It forwards every `INPUT_PERMISSION-*` in its
+        # environment, lower-cased with `-` as `_`, so this asks for `actions_variables: read`
+        # with no "Unexpected input" warning.
+        env:
+          INPUT_PERMISSION-ACTIONS-VARIABLES: read
       - name: Seal the token for the job
         id: seal
         env:

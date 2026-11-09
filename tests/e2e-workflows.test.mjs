@@ -24,7 +24,36 @@ const GATED_IF = (gate) => `\${{ !cancelled() && needs.start.result != 'failure'
 const gateOf = (name) => (Number(name.split('-')[1]) > 1 ? `gate-${name.split('-')[1]}` : null);
 const only = (o) => Object.values(o.jobs)[0];
 const mintOf = (pair) => docs[`e2e-${pair}-run.yml`].jobs.mint.steps.find((s) => TOKEN_ACTION.test(s.uses ?? ''));
-const permissionsOf = (step) => Object.fromEntries(Object.entries(step.with).filter(([k]) => k.startsWith('permission-')).map(([k, v]) => [k.slice('permission-'.length), v]));
+/**
+ * The permissions a `create-github-app-token` step asks GitHub for, by GitHub's names: what the
+ * pinned action forwards, every `INPUT_PERMISSION-*` it is given, from `with:` (`permission-*`)
+ * or from the step's `env:`, lower-cased with `-` as `_` (its `get-permissions-from-inputs.js`).
+ * By GitHub's names because a name GitHub doesn't grant fails the mint with a 422, and CI mints
+ * nothing (#167: `variables` is no permission; `actions_variables` is).
+ */
+const permissionsOf = (step) => Object.fromEntries([
+  ...Object.entries(step.with ?? {}).filter(([k]) => k.startsWith('permission-')).map(([k, v]) => [k.slice('permission-'.length), v]),
+  ...Object.entries(step.env ?? {}).filter(([k]) => k.startsWith('INPUT_PERMISSION-')).map(([k, v]) => [k.slice('INPUT_PERMISSION-'.length), v]),
+].map(([k, v]) => [k.toLowerCase().replaceAll('-', '_'), v]));
+
+// GitHub's names for the repository and organisation permissions an installation token may ask
+// for (the App permissions in the REST API's `POST /app/installations/{id}/access_tokens`). A
+// name outside them fails the mint with a 422, which no CI run here can see (#167).
+const GITHUB_PERMISSIONS = new Set([
+  'actions', 'actions_variables', 'administration', 'checks', 'contents', 'deployments', 'environments',
+  'issues', 'metadata', 'packages', 'pages', 'pull_requests', 'repository_hooks', 'secrets',
+  'security_events', 'statuses', 'vulnerability_alerts', 'workflows', 'organization_administration', 'members',
+]);
+
+describe('every token a workflow mints asks only for permissions GitHub has (#167)', () => {
+  it('MUTATION: each create-github-app-token step\'s permissions, as the action forwards them, are GitHub\'s names', () => {
+    const asked = Object.entries(docs).flatMap(([file, doc]) => Object.entries(doc.jobs ?? {}).flatMap(([job, j]) => (j.steps ?? [])
+      .filter((s) => TOKEN_ACTION.test(s.uses ?? ''))
+      .flatMap((s) => Object.keys(permissionsOf(s)).map((p) => `${file} ${job}: ${p}`))));
+    expect(asked.length).toBeGreaterThan(10);
+    expect(asked.filter((a) => !GITHUB_PERMISSIONS.has(a.split(': ')[1]))).toEqual([]);
+  });
+});
 
 describe('e2e.yml: its triggers, never a pull request (§7)', () => {
   it('runs on the poll\'s and the nightly\'s schedules, as runner/settings.json holds them, and on a dispatch of an exact release', () => {
@@ -177,7 +206,7 @@ describe('e2e.yml: the jobs of §5.2, in order', () => {
     expect(step.if).toBe('${{ matrix.scenario.deployTargets != null }}');
     expect(step.env).toEqual({ GH_TOKEN: '${{ steps.repo.outputs.token }}', TARGETS: '${{ toJSON(matrix.scenario.deployTargets) }}' });
     expect(step.run).toMatch(/gh variable set KANON_DEPLOY_TARGETS -R "\$ORG\/\$REPO_NAME" --body "\$\(printf %s "\$TARGETS" \| jq -c \.\)"/);
-    expect(permissionsOf(steps.find((s) => s.id === 'repo'))).toEqual({ secrets: 'write', administration: 'write', variables: 'write' });
+    expect(permissionsOf(steps.find((s) => s.id === 'repo'))).toEqual({ secrets: 'write', administration: 'write', actions_variables: 'write' });
     // No other step or job writes a variable.
     expect(steps.filter((s) => /gh variable set/.test(JSON.stringify(s)))).toEqual([step]);
     expect(Object.entries(e2e.jobs).filter(([n, j]) => n !== 'provision' && /variable set/.test(JSON.stringify(j)))).toEqual([]);
@@ -262,14 +291,14 @@ describe('each pair: a `mint` that holds the key, and a job handed only the toke
   it('the `kanon` token is read-only: no write, no Workflows, no Secrets (decision 23 (b))', () => {
     const perms = permissionsOf(mintOf('kanon'));
     // Variables read (#167): doctor's `deploy-targets` check lists the repository's variables.
-    expect(perms).toEqual({ contents: 'read', issues: 'read', 'pull-requests': 'read', actions: 'read', administration: 'read', variables: 'read' });
+    expect(perms).toEqual({ contents: 'read', issues: 'read', pull_requests: 'read', actions: 'read', administration: 'read', actions_variables: 'read' });
     expect(mintOf('kanon').with.repositories).toBe('${{ inputs.repository-name }}');
   });
 
   it('the `act` token is scoped to the one repository, with what pushing, merging, `repo.apply` and ending it take', () => {
     expect(mintOf('act').with.repositories).toBe('${{ inputs.repository-name }}');
     expect(permissionsOf(mintOf('act'))).toEqual({
-      contents: 'write', workflows: 'write', issues: 'write', 'pull-requests': 'write', actions: 'write', administration: 'write', secrets: 'read', checks: 'read',
+      contents: 'write', workflows: 'write', issues: 'write', pull_requests: 'write', actions: 'write', administration: 'write', secrets: 'read', checks: 'read',
     });
   });
 
@@ -280,7 +309,7 @@ describe('each pair: a `mint` that holds the key, and a job handed only the toke
   });
 
   it('the Author\'s label token is for the one repository: Issues and Pull requests write (E10)', () => {
-    expect(permissionsOf(mintOf('author-label'))).toEqual({ issues: 'write', 'pull-requests': 'write' });
+    expect(permissionsOf(mintOf('author-label'))).toEqual({ issues: 'write', pull_requests: 'write' });
     expect(mintOf('author-label').with.repositories).toBe('${{ inputs.repository-name }}');
   });
 

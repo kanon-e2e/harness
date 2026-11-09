@@ -190,7 +190,11 @@ jobs:
           repositories: ${{ env.REPO_NAME }}
           permission-secrets: write
           permission-administration: write
-          permission-variables: write
+        # VARIABLES, BY GITHUB'S NAME (#167): `actions_variables`, which the pinned action declares
+        # no input for; it forwards every `INPUT_PERMISSION-*` in its environment, lower-cased
+        # with `-` as `_` (e2e-kanon-run.yml's mint says the same).
+        env:
+          INPUT_PERMISSION-ACTIONS-VARIABLES: write
       # Each test App the scenario lists, under the names Kanon's callers map (`<APP>_APP_ID`,
       # `<APP>_APP_PRIVATE_KEY`); an App it doesn't list is never written.
       - name: Write the scenario's test Apps' secrets
