@@ -166,6 +166,23 @@ describe('e2e.yml: the jobs of §5.2, in order', () => {
     expect(e2e.jobs.provision.steps.at(-1).run).toMatch(/kanon-e2e-provisioned/);
   });
 
+  // MUTATION (#167): the deploy targets are written for every scenario, under another name, with
+  // another token, or after the repository is marked provisioned, and this test turns red.
+  it('MUTATION: `provision` writes `deployTargets` as the variable `KANON_DEPLOY_TARGETS` only for a scenario that sets it, with the repository token\'s Variables write (#167)', () => {
+    const steps = e2e.jobs.provision.steps;
+    const i = steps.findIndex((s) => s.name === 'Write the deploy targets variable (deployTargets)');
+    expect(i).toBeGreaterThan(-1);
+    expect(i).toBeLessThan(steps.length - 1);
+    const step = steps[i];
+    expect(step.if).toBe('${{ matrix.scenario.deployTargets != null }}');
+    expect(step.env).toEqual({ GH_TOKEN: '${{ steps.repo.outputs.token }}', TARGETS: '${{ toJSON(matrix.scenario.deployTargets) }}' });
+    expect(step.run).toMatch(/gh variable set KANON_DEPLOY_TARGETS -R "\$ORG\/\$REPO_NAME" --body "\$\(printf %s "\$TARGETS" \| jq -c \.\)"/);
+    expect(permissionsOf(steps.find((s) => s.id === 'repo'))).toEqual({ secrets: 'write', administration: 'write', variables: 'write' });
+    // No other step or job writes a variable.
+    expect(steps.filter((s) => /gh variable set/.test(JSON.stringify(s)))).toEqual([step]);
+    expect(Object.entries(e2e.jobs).filter(([n, j]) => n !== 'provision' && /variable set/.test(JSON.stringify(j)))).toEqual([]);
+  });
+
   // MUTATION (#123): the dead webhook is written for every scenario, or under another name, or with
   // a URL Kanon's Slack hook would refuse by shape, and this test turns red.
   it('MUTATION: `provision` writes the dead chat webhook as `KANON_CHAT_PROJECT_DIGEST` only for a scenario with `chatPlaceholder`, before marking it provisioned (#123)', () => {
@@ -244,7 +261,8 @@ describe('each pair: a `mint` that holds the key, and a job handed only the toke
 
   it('the `kanon` token is read-only: no write, no Workflows, no Secrets (decision 23 (b))', () => {
     const perms = permissionsOf(mintOf('kanon'));
-    expect(perms).toEqual({ contents: 'read', issues: 'read', 'pull-requests': 'read', actions: 'read', administration: 'read' });
+    // Variables read (#167): doctor's `deploy-targets` check lists the repository's variables.
+    expect(perms).toEqual({ contents: 'read', issues: 'read', 'pull-requests': 'read', actions: 'read', administration: 'read', variables: 'read' });
     expect(mintOf('kanon').with.repositories).toBe('${{ inputs.repository-name }}');
   });
 

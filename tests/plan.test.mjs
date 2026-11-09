@@ -460,6 +460,17 @@ describe('the real-model ledger in `plan` (§6.2, E10)', () => {
     expect((await plan({ event: 'schedule', schedule: POLL, catalogue: dispatched }, world())).authorDispatches).toEqual([]);
   });
 
+  it('MUTATION: a scenario\'s matrix entry carries `deployTargets` only where scenario.json sets it, for `provision`\'s variable (#167)', async () => {
+    const targets = { staging: 'r-s', production: 'r-p' };
+    const withTargets = CATALOGUE.map((x) => (x.id === 'deploy-rehearsal' ? { ...x, deployTargets: targets } : x));
+    const byId = Object.fromEntries([
+      ...(await plan({ event: 'workflow_dispatch', release: 'v0.41.0', select: 'deploy-rehearsal', catalogue: withTargets }, world())).scenarios,
+      ...(await plan({ event: 'workflow_dispatch', release: 'v0.41.0', select: 'install-review', catalogue: withTargets }, world())).scenarios,
+    ].map((x) => [x.id, x]));
+    expect(byId['deploy-rehearsal']).toEqual({ id: 'deploy-rehearsal', apps: ['releaser'], claude: 'none', gate: false, deployTargets: targets });
+    expect(byId['install-review']).toEqual({ id: 'install-review', apps: ['author', 'judge'], claude: 'none', gate: false });
+  });
+
   it('MUTATION: a scenario\'s matrix entry carries `chatPlaceholder` only where scenario.json sets it, for `provision`\'s dead webhook (#123)', async () => {
     const placeholder = CATALOGUE.map((x) => (x.id === 'deploy-rehearsal' ? { ...x, chatPlaceholder: true } : x.id === 'install-review' ? { ...x, chatPlaceholder: false } : x));
     const out = await plan({ event: 'workflow_dispatch', release: 'v0.41.0', select: 'install-review' }, world());

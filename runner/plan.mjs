@@ -96,10 +96,15 @@ export function fitCap(catalogue, cap, day) {
 
 /**
  * What a scenario job takes of a scenario, and `verdict` its `gate`, from the catalogue at the run's
- * commit. `chatPlaceholder` only where scenario.json sets it, for `provision`'s dead-webhook step (#123).
+ * commit. `chatPlaceholder` only where scenario.json sets it, for `provision`'s dead-webhook step (#123),
+ * and `deployTargets` likewise, for its deploy-targets step (#167).
  * @param {any} s
  */
-const entry = (s) => ({ id: s.id, apps: s.apps, claude: s.claude, gate: s.gate === true, ...(s.chatPlaceholder === true ? { chatPlaceholder: true } : {}) });
+const entry = (s) => ({
+  id: s.id, apps: s.apps, claude: s.claude, gate: s.gate === true,
+  ...(s.chatPlaceholder === true ? { chatPlaceholder: true } : {}),
+  ...(s.deployTargets && typeof s.deployTargets === 'object' ? { deployTargets: s.deployTargets } : {}),
+});
 
 /**
  * `authorLabels` is the planned scenarios whose `authorLabel` the `author-label` job applies after

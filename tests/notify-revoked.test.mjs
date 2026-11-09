@@ -103,6 +103,19 @@ describe('`authorDispatch` and `chatPlaceholder` in scenario.json', () => {
     ]) expect(validateScenarioJson({ ...base, ...over }, 'x').join('\n')).toMatch(re);
   });
 
+  it('MUTATION: `deployTargets` maps environments to one-line role identifiers, on a deploy scenario only (#167)', () => {
+    const deploy = { ...base, family: 'deploy' };
+    expect(validateScenarioJson({ ...deploy, deployTargets: { staging: 'role-a', production: 'arn:aws:iam::1:role/x' } }, 'x')).toEqual([]);
+    expect(validateScenarioJson({ ...deploy, deployTargets: {} }, 'x').join('\n')).toMatch(/at least one environment/);
+    expect(validateScenarioJson({ ...deploy, deployTargets: { Staging: 'r' } }, 'x').join('\n')).toMatch(/key `Staging`/);
+    expect(validateScenarioJson({ ...deploy, deployTargets: { staging: '' } }, 'x').join('\n')).toMatch(/deployTargets\.staging/);
+    expect(validateScenarioJson({ ...deploy, deployTargets: { staging: 'a"b' } }, 'x').join('\n')).toMatch(/deployTargets\.staging/);
+    expect(validateScenarioJson({ ...deploy, deployTargets: { staging: 'a\nb' } }, 'x').join('\n')).toMatch(/deployTargets\.staging/);
+    expect(validateScenarioJson({ ...deploy, deployTargets: { staging: 7 } }, 'x').join('\n')).toMatch(/deployTargets\.staging/);
+    expect(validateScenarioJson({ ...base, family: 'lane', deployTargets: { staging: 'r' } }, 'x').join('\n')).toMatch(/for a `deploy` scenario/);
+    expect(validateScenarioJson({ ...deploy, deployTargets: 'staging' }, 'x').join('\n')).toMatch(/deployTargets/);
+  });
+
   it('`chatPlaceholder` is a boolean', () => {
     expect(validateScenarioJson({ ...base, chatPlaceholder: true }, 'x')).toEqual([]);
     expect(validateScenarioJson({ ...base, chatPlaceholder: 'yes' }, 'x').join('\n')).toMatch(/chatPlaceholder/);

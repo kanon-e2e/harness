@@ -5,5 +5,6 @@
   "gate": true,
   "apps": ["judge", "releaser"],
   "claude": "none",
-  "deadlineMinutes": 100
+  "deadlineMinutes": 100,
+  "deployTargets": { "staging": "e2e-rehearsal-staging-role", "production": "e2e-rehearsal-production-role" }
 }

@@ -53,6 +53,11 @@ export const SCENARIO_FIELDS = Object.freeze({
   // Optional (#123): `provision` stores a fixed, never-valid Slack webhook URL as the scenario
   // repository's `KANON_CHAT_PROJECT_DIGEST`, so the project digest's `notify` job posts to a dead hook.
   chatPlaceholder: bool(),
+  // Optional (#167): `provision` stores this object, as JSON, as the scenario repository's
+  // `KANON_DEPLOY_TARGETS` repository variable: each declared deploy environment's role
+  // identifier, which Kanon's deploy caller maps into the lane and `kanon doctor` checks
+  // (`deploy.targets-missing`). A role is never a secret, so a placeholder is data here.
+  deployTargets: map(),
   // Optional (#139): the kinds of run the scenario takes part in, `plan` keeping it out of every
   // other kind. Left out, it is every kind. A `select=<id>` dispatch runs it whatever it says.
   runsOn: strs({ nonEmpty: true, items: { enum: [...RUN_KINDS] } }),
@@ -68,6 +73,11 @@ export const runsOn = (s, kind) => !Array.isArray(s.runsOn) || s.runsOn.includes
 export const AUTHOR_LABEL = /^[a-z0-9][a-z0-9:_.-]{0,49}$/;
 
 const isObject = (/** @type {unknown} */ v) => v !== null && typeof v === 'object' && !Array.isArray(v);
+
+/** A deploy environment's name, as `deployTargets` keys it. */
+export const ENVIRONMENT = /^[a-z0-9][a-z0-9_-]{0,39}$/;
+/** A role identifier `deployTargets` gives: one line of printable text, no quote or backslash. */
+export const ROLE = /^[A-Za-z0-9:/_.@+=,-]{1,200}$/;
 
 /**
  * The problems of a scenario.json, for the directory named `dirName`.
@@ -93,6 +103,15 @@ export function validateScenarioJson(s, dirName) {
     if (typeof a.workflow !== 'string' || !WORKFLOW.test(a.workflow)) p.push(`\`authorDispatch.workflow\` ${JSON.stringify(a.workflow)} is not a workflow's file name`);
     if (!(Array.isArray(o.apps) && o.apps.includes('author'))) p.push('`authorDispatch` has the Author dispatch the workflow, and `apps` doesn\'t list `author`');
     if (o.claude !== 'subscription') p.push('`authorDispatch` is for a real-model scenario (`claude: subscription`): the run\'s sizing counts the Author\'s jobs only for real-model scenarios');
+  }
+  if (isObject(o.deployTargets)) {
+    const t = /** @type {Record<string, unknown>} */ (o.deployTargets);
+    if (!Object.keys(t).length) p.push('`deployTargets` names at least one environment');
+    for (const [env, role] of Object.entries(t)) {
+      if (!ENVIRONMENT.test(env)) p.push(`\`deployTargets\` key \`${env}\` must match ${ENVIRONMENT}`);
+      if (typeof role !== 'string' || !ROLE.test(role)) p.push(`\`deployTargets.${env}\` ${JSON.stringify(role)} must be a role identifier matching ${ROLE}`);
+    }
+    if (o.family !== 'deploy') p.push('`deployTargets` is for a `deploy` scenario: only the deploy lane reads `KANON_DEPLOY_TARGETS`');
   }
   if (o.gate === true && Array.isArray(o.runsOn) && !o.runsOn.includes('candidate')) p.push('`gate: true` gates a candidate, and `runsOn` leaves out `candidate`: the candidate\'s run would never hold the scenario');
   return p;

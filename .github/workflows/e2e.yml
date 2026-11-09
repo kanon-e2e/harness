@@ -180,7 +180,7 @@ jobs:
             exit 1
           fi
           echo "Created $ORG/$REPO_NAME."
-      - name: Mint a token scoped to the new repository (Secrets write)
+      - name: Mint a token scoped to the new repository (Secrets and Variables write)
         id: repo
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
@@ -190,6 +190,7 @@ jobs:
           repositories: ${{ env.REPO_NAME }}
           permission-secrets: write
           permission-administration: write
+          permission-variables: write
       # Each test App the scenario lists, under the names Kanon's callers map (`<APP>_APP_ID`,
       # `<APP>_APP_PRIVATE_KEY`); an App it doesn't list is never written.
       - name: Write the scenario's test Apps' secrets
@@ -258,6 +259,20 @@ jobs:
             fi
           done
           echo "Set ${want[*]}, as $RELEASE's guard checks them."
+      # THE DEPLOY TARGETS (#167): for a scenario whose scenario.json sets `deployTargets`, that
+      # object, as compact JSON, as the repository variable `KANON_DEPLOY_TARGETS`, which Kanon's
+      # deploy caller maps into the lane and `kanon doctor` checks (`deploy.targets-missing`). An
+      # adopter sets it at install, so it is set here, before anything runs. A role identifier is no
+      # secret; the validator holds each to one line of plain characters.
+      - name: Write the deploy targets variable (deployTargets)
+        if: ${{ matrix.scenario.deployTargets != null }}
+        env:
+          GH_TOKEN: ${{ steps.repo.outputs.token }}
+          TARGETS: ${{ toJSON(matrix.scenario.deployTargets) }}
+        run: |
+          set -euo pipefail
+          gh variable set KANON_DEPLOY_TARGETS -R "$ORG/$REPO_NAME" --body "$(printf %s "$TARGETS" | jq -c .)"
+          echo "Wrote KANON_DEPLOY_TARGETS for $(printf %s "$TARGETS" | jq -r 'keys | join(", ")')."
       # THE DEAD CHAT WEBHOOK (#123; the Owner, 2026-10-25): for a scenario whose scenario.json sets
       # `chatPlaceholder`, a fixed Slack incoming-webhook URL that no workspace holds, so it is
       # well-formed and never valid. Slack refuses it as it refuses a revoked one, and the project
