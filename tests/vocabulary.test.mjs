@@ -12,13 +12,13 @@ import { fakeClock } from './helpers/stubs.mjs';
  * Kanon's code run only at the release under test, fetched as an adopter fetches it.
  */
 
-/** §4.2's table, with `repo.apply` (decision 23 (b)), the deploy rehearsal's three (E5), `bootstrap.end` (#59), and `expect.row` (E10). */
+/** §4.2's table, with `repo.apply` (decision 23 (b)), the deploy rehearsal's three (E5), `bootstrap.end` (#59), `expect.row` (E10), and `callers.fix` (#172). */
 const PLAN = [
   'kanon.init', 'repo.apply', 'kanon.doctor', 'kanon.at', 'register.write', 'pins.move', 'files.commit',
   'pr.open', 'pr.label', 'pr.merge', 'issue.open', 'issue.label', 'workflow.dispatch', 'release.cut',
   'deployment.await-approval', 'run.await', 'expect.init', 'expect.doctor', 'expect.run', 'expect.check',
   'expect.issue', 'expect.pr', 'expect.artifact', 'expect.api',
-  'environment.create', 'ruleset.tags', 'issue.await', 'bootstrap.end', 'expect.row',
+  'environment.create', 'ruleset.tags', 'issue.await', 'bootstrap.end', 'expect.row', 'callers.fix',
 ];
 
 const verbs = Object.values(VOCABULARY);
@@ -45,8 +45,8 @@ describe('the vocabulary is §4.2\'s closed set, each verb once', () => {
 describe('each verb belongs to one kind of segment (§4.2)', () => {
   const kindOf = (v) => VOCABULARY[v].kind;
 
-  it('the kanon.*, register.write and pins.move verbs run Kanon\'s code: kanon segments only', () => {
-    expect(PLAN.filter((v) => kindOf(v) === 'kanon').sort()).toEqual(['kanon.at', 'kanon.doctor', 'kanon.init', 'pins.move', 'register.write']);
+  it('the kanon.*, register.write, pins.move and callers.fix verbs run Kanon\'s code: kanon segments only', () => {
+    expect(PLAN.filter((v) => kindOf(v) === 'kanon').sort()).toEqual(['callers.fix', 'kanon.at', 'kanon.doctor', 'kanon.init', 'pins.move', 'register.write']);
   });
 
   it('the expect.*, run.await and issue.await verbs only read: either segment', () => {

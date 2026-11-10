@@ -186,3 +186,147 @@ describe('pins.move', () => {
     await expect(run('pins.move', {}, context({ exec: x.exec }))).rejects.toThrow(/move-pins.*exit 2.*not an exact release/);
   });
 });
+
+describe('callers.fix', () => {
+  // Callers as an older `kanon init` wrote them: top-level `permissions:`, events under `on:`, the
+  // calling job's `secrets:` (#172).
+  const TRIAGE = [
+    'name: Triage (Implementer)',
+    '',
+    'on:',
+    '  issues:',
+    '    types: [labeled]',
+    '  workflow_dispatch:',
+    '    inputs:',
+    '      issue_number:',
+    '        description: "Issue number to triage"',
+    '        required: true',
+    '',
+    'permissions:',
+    '  contents: read',
+    '',
+    'jobs:',
+    '  triage:',
+    `    uses: yedeya-labs/kanon/.github/workflows/agent-triage.yml@${RELEASE}`,
+    '    with:',
+    '      issue_number: ${{ inputs.issue_number }}',
+    '    secrets:',
+    '      AUTHOR_APP_ID: ${{ secrets.AUTHOR_APP_ID }}',
+    '      OLD_SECRET: ${{ secrets.OLD_SECRET }}',
+    '',
+  ].join('\n');
+  const RECONCILE = [
+    'name: Lead (Lead) — reconcile',
+    '',
+    'on:',
+    '  pull_request_target:',
+    '    types: [labeled]',
+    '  schedule:',
+    '    - cron: "7 * * * *"',
+    '  workflow_run:',
+    '    workflows: [Review (Reviewer)]',
+    '    types: [completed]',
+    '',
+    'permissions:',
+    '  contents: read',
+    '  issues: read',
+    '',
+    'jobs:',
+    '  reconcile:',
+    `    uses: yedeya-labs/kanon/.github/workflows/agent-lead-reconcile.yml@${RELEASE}`,
+    '',
+  ].join('\n');
+  const T = '.github/workflows/triage.yml';
+  const R = '.github/workflows/lead-reconcile.yml';
+  const finding = (id, subject, commands, text = 't') => ({ id, category: 'caller', blocking: true, subject, message: 'm', fix: { text, commands, url: null } });
+  const doc = (findings) => ({ ...DOCTOR_DOC, findings });
+  /** A clone holding the two callers, and `npx` answering each doctor run with the next document. */
+  const setup = (...docs) => {
+    const clone = writeTree(tempDir('clone-'), { [T]: TRIAGE, [R]: RECONCILE });
+    let n = 0;
+    const x = stubExec([[isNpx, () => ({ status: 4, stdout: JSON.stringify(docs[Math.min(n++, docs.length - 1)]) })]]);
+    return { clone, x, ctx: context({ exec: x.exec, clone }) };
+  };
+  const read = (clone, path) => readFileSync(join(clone, path), 'utf8');
+
+  it('runs doctor --to the release under test, and with no caller finding writes nothing and runs it once', async () => {
+    const { clone, x, ctx } = setup(doc([{ ...finding('label.missing', 'kanon-e2e/x', []), category: 'label' }]));
+    await run('callers.fix', {}, ctx);
+    expect(x.calls).toEqual([{ cmd: 'npx', args: [...PACKAGE, 'kanon', 'doctor', '--json', '--to', RELEASE], cwd: clone }]);
+    expect(read(clone, T)).toBe(TRIAGE);
+    expect(ctx.state.callersFixed).toEqual([]);
+  });
+
+  it('MUTATION: a grant: adds the permission under the top-level permissions:, or raises a weaker level', async () => {
+    const { clone, x, ctx } = setup(doc([finding('caller.grant-missing', T, ['  issues: read', '  contents: write'])]), doc([]));
+    await run('callers.fix', {}, ctx);
+    expect(read(clone, T)).toBe(TRIAGE.replace('permissions:\n  contents: read\n', 'permissions:\n  contents: write\n  issues: read\n'));
+    expect(ctx.state.callersFixed).toEqual([{ id: 'caller.grant-missing', subject: T }]);
+    expect(x.calls).toHaveLength(2);
+  });
+
+  it('MUTATION: a trigger type: adds an event the caller doesn\'t take at the end of on:, or extends the one event\'s types', async () => {
+    const { clone, ctx } = setup(doc([
+      finding('caller.event-types-missing', T, ['  issue_comment:', '    types: [created]']),
+      finding('caller.event-types-missing', R, ['    types: [labeled, ready_for_review]']),
+    ]), doc([]));
+    await run('callers.fix', {}, ctx);
+    expect(read(clone, T)).toBe(TRIAGE.replace('        required: true\n', '        required: true\n  issue_comment:\n    types: [created]\n'));
+    expect(read(clone, R)).toBe(RECONCILE.replace('  pull_request_target:\n    types: [labeled]\n', '  pull_request_target:\n    types: [labeled, ready_for_review]\n'));
+  });
+
+  it('MUTATION: a workflow_run: extends its workflows:, or adds the whole trigger to a caller without one', async () => {
+    const { clone, ctx } = setup(doc([
+      finding('caller.workflow-run-missing', R, ['    workflows: [Review (Reviewer), Implement (Implementer)]']),
+      finding('caller.workflow-run-missing', T, ['  workflow_run:', '    workflows: [CI]', '    types: [completed]']),
+    ]), doc([]));
+    await run('callers.fix', {}, ctx);
+    expect(read(clone, R)).toBe(RECONCILE.replace('    workflows: [Review (Reviewer)]\n', '    workflows: [Review (Reviewer), Implement (Implementer)]\n'));
+    expect(read(clone, T)).toBe(TRIAGE.replace('        required: true\n', '        required: true\n  workflow_run:\n    workflows: [CI]\n    types: [completed]\n'));
+  });
+
+  it('MUTATION: a secret mapping: adds a missing one to the job\'s secrets:, and removes a stale one', async () => {
+    const { clone, ctx } = setup(doc([
+      finding('caller.secret-missing', T, ['      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}', '      AUTHOR_APP_ID: ${{ secrets.AUTHOR_APP_ID }}']),
+      finding('caller.secret-stale', T, ['      OLD_SECRET: ${{ secrets.OLD_SECRET }}']),
+    ]), doc([]));
+    await run('callers.fix', {}, ctx);
+    expect(read(clone, T)).toBe(TRIAGE.replace('      OLD_SECRET: ${{ secrets.OLD_SECRET }}\n', '      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}\n'));
+  });
+
+  it('MUTATION: refuses a caller finding it can\'t apply mechanically, by name, and applies none of the others', async () => {
+    const { clone, x, ctx } = setup(doc([
+      finding('caller.grant-missing', T, ['  issues: read']),
+      finding('caller.input-stale', T, []),
+    ]));
+    await expect(run('callers.fix', {}, ctx)).rejects.toThrow(/can't apply mechanically: caller\.input-stale on \.github\/workflows\/triage\.yml: caller\.input-stale is not a fix callers\.fix applies/);
+    await expect(run('callers.fix', {}, setup(doc([finding('caller.input-stale', T, [])])).ctx)).rejects.toMatchObject({ name: 'Fail' });
+    expect(read(clone, T)).toBe(TRIAGE);
+    expect(x.calls).toHaveLength(1);
+  });
+
+  it('MUTATION: refuses a fix that doesn\'t fit the caller as written', async () => {
+    const refused = async (f, files = {}, why = /./) => {
+      const clone = writeTree(tempDir('clone-'), { [T]: TRIAGE, [R]: RECONCILE, ...files });
+      const x = stubExec([[isNpx, () => ({ status: 4, stdout: JSON.stringify(doc([f])) })]]);
+      await expect(run('callers.fix', {}, context({ exec: x.exec, clone }))).rejects.toMatchObject({ name: 'Fail', message: expect.stringMatching(why) });
+      expect(read(clone, T)).toBe(files[T] ?? TRIAGE);
+      expect(read(clone, R)).toBe(RECONCILE);
+    };
+    // permissions: that isn't a map, and a grant at the job level.
+    await refused(finding('caller.grant-missing', T, ['permissions:', '  contents: read', '  issues: read']), {}, /its permissions: is not a map of grants/);
+    await refused(finding('caller.grant-missing', T, ['  issues: read']), { [T]: TRIAGE.replace('    uses:', '    permissions:\n      contents: read\n    uses:') }, /grants at the job level/);
+    // No event's types the new list extends; an event the caller takes already, added whole.
+    await refused(finding('caller.event-types-missing', T, ['    types: [opened]']));
+    await refused(finding('caller.event-types-missing', T, ['  issues:', '    types: [labeled, opened]']));
+    // A secret line it doesn't map, removed; a finding on a file that isn't a workflow.
+    await refused(finding('caller.secret-stale', T, ['      NOT_MAPPED: ${{ secrets.NOT_MAPPED }}']));
+    await refused(finding('caller.grant-missing', 'triage.yml', ['  issues: read']));
+  });
+
+  it('MUTATION: fails when doctor still reports a caller finding after the fixes', async () => {
+    const left = finding('caller.grant-missing', T, ['  issues: read']);
+    const { ctx } = setup(doc([left]), doc([left]));
+    await expect(run('callers.fix', {}, ctx)).rejects.toThrow(/still reports caller\.grant-missing on \.github\/workflows\/triage\.yml/);
+  });
+});

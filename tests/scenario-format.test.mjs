@@ -496,6 +496,7 @@ const EVERY_VERB = {
         { verb: 'expect.init', status: 'steps-left', exitCode: 0, findings: ['label.create', 'ruleset.create'], absent: ['app.failed'], fields: [{ pointer: '/pin', equals: 'candidate-v0.41.0' }] },
         { verb: 'register.write' },
         { verb: 'pins.move' },
+        { verb: 'callers.fix' },
       ],
       act: [
         { verb: 'files.commit', from: 'kanon', message: 'Install Kanon' },

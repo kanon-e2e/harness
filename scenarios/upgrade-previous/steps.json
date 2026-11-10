@@ -22,7 +22,8 @@
         { "verb": "kanon.doctor", "to": true },
         { "verb": "expect.doctor", "unchecked": ["secrets"], "fields": [{ "pointer": "/releases/to", "equals": "{{release}}" }] },
         { "verb": "pins.move" },
-        { "verb": "kanon.init", "flags": ["--feature=full", "--review-trigger=labelled", "--no-sensitive-data"] }
+        { "verb": "kanon.init", "flags": ["--feature=full", "--review-trigger=labelled", "--no-sensitive-data"] },
+        { "verb": "callers.fix" }
       ],
       "act": [
         { "verb": "files.commit", "from": "kanon", "branch": "upgrade", "message": "chore: upgrade Kanon to the release under test" },

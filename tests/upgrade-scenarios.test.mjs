@@ -69,8 +69,9 @@ describe.each(Object.entries(SCENARIOS))('%s', (id, release) => {
     for (const a of s.phases[1].act.filter((x) => x.verb === 'repo.apply')) expect(a.firstCommit).toBeUndefined();
   });
 
-  it('phase 2, kanon: doctor --to, kept and held to /releases/to equal to {{release}}, then pins.move, then init at the release under test with the same flags', () => {
-    expect(s.phases[1].kanon.map((x) => x.verb)).toEqual(['kanon.doctor', 'expect.doctor', 'pins.move', 'kanon.init']);
+  it('phase 2, kanon: doctor --to, kept and held to /releases/to equal to {{release}}, then pins.move, then init at the release under test with the same flags, then callers.fix (#172)', () => {
+    expect(s.phases[1].kanon.map((x) => x.verb)).toEqual(['kanon.doctor', 'expect.doctor', 'pins.move', 'kanon.init', 'callers.fix']);
+    expect(s.phases[1].kanon[4]).toEqual({ verb: 'callers.fix' });
     const [to, held] = s.phases[1].kanon;
     expect(to).toEqual({ verb: 'kanon.doctor', to: true });
     expect(held.fields).toContainEqual({ pointer: '/releases/to', equals: '{{release}}' });
