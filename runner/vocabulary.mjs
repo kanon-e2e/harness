@@ -20,6 +20,7 @@
 // { cwd })`, each resolving to `{ status, stdout, stderr }`, and `now()` and `sleep(ms)`.
 
 import bootstrapEnd from './verbs/bootstrap-end.mjs';
+import callersFix from './verbs/callers-fix.mjs';
 import deploymentAwaitApproval from './verbs/deployment-await-approval.mjs';
 import environmentCreate from './verbs/environment-create.mjs';
 import expectApi from './verbs/expect-api.mjs';
@@ -54,7 +55,7 @@ const ALL = [
   prOpen, prLabel, prMerge, issueOpen, issueLabel, workflowDispatch, releaseCut,
   deploymentAwaitApproval, runAwait, expectInit, expectDoctor, expectRun, expectCheck,
   expectIssue, expectPr, expectArtifact, expectApi, expectRow,
-  environmentCreate, rulesetTags, issueAwait, bootstrapEnd,
+  environmentCreate, rulesetTags, issueAwait, bootstrapEnd, callersFix,
 ];
 
 /** Every verb, by name. @type {Readonly<Record<string, any>>} */
