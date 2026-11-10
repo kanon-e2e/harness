@@ -43,7 +43,8 @@ export const readJobs = async (ctx, runId, attempt) => {
  *   `pass`, `fail` or `infra`, with the phase whose `act` job recorded it;
  *   `unconfirmed`, with why, for a `pass` R3 holds back, or a job that recorded two results;
  *   null, with why, when no `act` job of it recorded one. `legacy` is then whether its `act`
- *   jobs ran from a workflow without the result steps, from before #24's fix.
+ *   jobs ran from a workflow without the result steps, from before #24's fix: each lists its
+ *   steps, and none lists a result step (#170).
  * @param {any[]} jobs @param {string} id
  * @returns {{ result: 'pass' | 'fail' | 'infra' | 'unconfirmed' | null, phase?: number, why?: string, legacy?: boolean }}
  */
@@ -62,7 +63,9 @@ export function attested(jobs, id) {
     return {
       result: null,
       why: ran.length ? `no \`act\` job of it recorded a result` : `no \`act\` job of it ran`,
-      legacy: ran.length > 0 && !ran.some((x) => steps(x.job).some((/** @type {any} */ s) => names.includes(s?.name))),
+      // A job GitHub never started (cancelled while queued, or no runner took it) lists no steps,
+      // whatever workflow it ran from, so it can't say it ran from one without the result steps.
+      legacy: ran.length > 0 && ran.every((x) => steps(x.job).length > 0) && !ran.some((x) => steps(x.job).some((/** @type {any} */ s) => names.includes(s?.name))),
     };
   }
   const [result, ...more] = recorded(first.job);
