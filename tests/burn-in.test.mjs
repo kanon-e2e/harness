@@ -177,7 +177,7 @@ describe('a pass counts only when attempt 1\'s own `act` job recorded it (#24, R
     expect(out.streak).toBe(2);
   });
 
-  it('a run from before the result steps existed reads its artifact, as it did then: its `act` jobs list none', async () => {
+  it('a run from before the result steps existed reads its artifact, as it did then: its `act` jobs each list their steps, and none a result step', async () => {
     const out = await burnIn(passes(3, 1, { evidence: 'legacy' }));
     expect(out.streak).toBe(3);
   });
