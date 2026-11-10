@@ -33,11 +33,13 @@ const run = (id, o = {}) => ({
 /**
  * Attempt 1's jobs list (#24, R3): by default its `act` job recorded the result the artifact
  * reads. `evidence` says otherwise: the result its `act` job recorded instead, `legacy` for a run
- * from before the result steps, or `none` for no `act` job of the scenario at all.
+ * from before the result steps, `unstarted` for an `act` job GitHub never started (no steps), or
+ * `none` for no `act` job of the scenario at all.
  */
 const jobsOf = (r) => {
   const recorded = r.evidence ?? r.result;
   if (recorded === 'none') return [];
+  if (recorded === 'unstarted') return [{ name: actJob(1, ID), conclusion: 'cancelled', steps: [] }];
   const steps = recorded === 'legacy' ? [{ name: 'Run the act segment', conclusion: 'success' }] : ['pass', 'fail', 'infra'].map((x) => ({ name: RESULT_STEPS[x], conclusion: x === recorded ? 'success' : 'skipped' }));
   return [{ name: actJob(1, ID), conclusion: 'success', steps }];
 };
@@ -178,6 +180,12 @@ describe('a pass counts only when attempt 1\'s own `act` job recorded it (#24, R
   it('a run from before the result steps existed reads its artifact, as it did then: its `act` jobs list none', async () => {
     const out = await burnIn(passes(3, 1, { evidence: 'legacy' }));
     expect(out.streak).toBe(3);
+  });
+
+  it('breaks the run of passes on a planted `pass` whose `act` job GitHub never started: no steps is not a run from before them (#170)', async () => {
+    const out = await burnIn([...passes(3), run(4, { evidence: 'unstarted' }), ...passes(2, 5)]);
+    expect(out.streak).toBe(2);
+    expect(out.rows.find((r) => r.run === 4)).toMatchObject({ pass: false, result: 'unconfirmed' });
   });
 });
 

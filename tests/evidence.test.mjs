@@ -74,9 +74,18 @@ describe('attested(): a scenario\'s result from the jobs list (#24, R3)', () => 
     expect(attested([act(1, { steps: [step(RESULT_STEPS.pass, 'success'), step(RESULT_STEPS.fail, 'success')] })], ID).result).toBe('unconfirmed');
   });
 
-  it('tells a run from before the result steps existed (`legacy`): its `act` jobs ran, and none lists one', () => {
-    expect(attested([act(1, { steps: [step('Run the act segment', 'success')] }), act(2, { steps: [] })], ID)).toMatchObject({ result: null, legacy: true });
+  it('tells a run from before the result steps existed (`legacy`): its `act` jobs ran, each lists its steps, and none lists a result step', () => {
+    expect(attested([act(1, { steps: [step('Run the act segment', 'success')] }), act(2, { steps: [step('Run the act segment', 'success')] })], ID)).toMatchObject({ result: null, legacy: true });
     expect(attested([], ID).legacy).toBe(false);
+  });
+
+  it('an `act` job GitHub never started lists no steps, and is not from before the result steps (#170)', () => {
+    // Cancelled while queued, or no runner ever took it: it ran from today's workflow all the same.
+    for (const conclusion of ['cancelled', 'failure']) {
+      expect(attested([act(1, { conclusion, steps: [] })], ID), conclusion).toMatchObject({ result: null, legacy: false });
+      expect(attested([{ name: actJob(1, ID), conclusion }, { ...act(2, { conclusion }), steps: null }], ID).legacy, conclusion).toBe(false);
+      expect(attested([act(1, { steps: [step('Run the act segment', 'success')] }), act(2, { conclusion, steps: [] })], ID).legacy, conclusion).toBe(false);
+    }
   });
 });
 
