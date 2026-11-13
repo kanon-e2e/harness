@@ -92,6 +92,12 @@ const VITEST_CONFIG = ['vitest.config', 'vite.config'].flatMap((name) => ['.ts',
  * without running the guard tests (#128).
  */
 const NPMRC = ['.npmrc'];
+/**
+ * The root `package.json` and its lockfile: the dependencies the runner and the janitor will load
+ * with the driver's token, and the `test` script the `Tests` check runs, which could skip a guard
+ * test (#13, #175).
+ */
+const PACKAGE = ['package.json', 'package-lock.json'];
 /** Every workflow that names an environment reads that environment's keys. */
 const ENVIRONMENT_READERS = [...new Set(environmentJobs(readWorkflows()).map(({ file }) => `.github/workflows/${file}`))];
 
@@ -135,6 +141,10 @@ describe('the escalation paths keep what runs with the driver key the Owner\'s',
 
   it('marks a root `.npmrc` `always`, which decides how npm runs the `Tests` check', () => {
     expect(notAlways(entries, NPMRC)).toEqual([]);
+  });
+
+  it('marks the root `package.json` and `package-lock.json` `always`, the dependencies and the `test` script', () => {
+    expect(notAlways(entries, PACKAGE)).toEqual([]);
   });
 
   it('leaves the other tests and their shared stubs green', () => {
