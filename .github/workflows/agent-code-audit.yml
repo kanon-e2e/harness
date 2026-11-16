@@ -22,7 +22,7 @@ permissions:
 
 jobs:
   audit:
-    uses: yedeya-labs/kanon/.github/workflows/agent-code-audit.yml@v0.42.0
+    uses: yedeya-labs/kanon/.github/workflows/agent-code-audit.yml@v0.45.0
     with:
       max_turns: ${{ inputs.max_turns }}
       reason: ${{ inputs.reason }}
