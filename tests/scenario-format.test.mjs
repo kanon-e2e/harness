@@ -3,7 +3,8 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { SUBSTITUTION } from '../runner/lib/substitute.mjs';
 import { layStart } from '../runner/run.mjs';
-import { scenarioDirs, validateScenarioDir, validateScenarioJson, validateStart, validateSteps } from '../runner/validate.mjs';
+import { SETTINGS } from '../runner/sizing.mjs';
+import { SEGMENT_DEADLINE, SEGMENT_SETUP_MINUTES, SEGMENTS, scenarioDirs, validateScenarioDir, validateScenarioJson, validateStart, validateSteps } from '../runner/validate.mjs';
 import { VOCABULARY } from '../runner/vocabulary.mjs';
 import { RELEASE, scenarioJson, tempDir, writeScenario, writeTree } from './helpers/stubs.mjs';
 
@@ -261,6 +262,22 @@ describe('the closed vocabulary, each verb in its kind of segment (§4.2)', () =
     for (const deadline of [0, 121, 2.5, '10']) {
       expect(stepErrors({ verb: 'release.cut', deadline }).join('\n')).toMatch(/deadline/);
     }
+  });
+
+  it('refuses a deadline its segment\'s job can\'t outlive, since GitHub kills the job first and the step never reads fail (#180)', () => {
+    const step = (deadline) => ({ verb: 'run.await', workflow: 'ci.yml', event: 'push', branch: 'main', deadline });
+    for (const segment of SEGMENTS) {
+      const limit = SETTINGS.minutes[segment] - SEGMENT_SETUP_MINUTES;
+      expect(SEGMENT_DEADLINE[segment]).toBe(limit);
+      expect(stepErrors(step(limit), segment)).toEqual([]);
+      for (const deadline of [limit + 1, SETTINGS.minutes[segment], 45, 120]) {
+        expect(stepErrors(step(deadline), segment).join('\n')).toMatch(new RegExp(`\`deadline\` ${deadline} .*\`${segment}\` job.* ${SETTINGS.minutes[segment]} minutes`));
+      }
+    }
+    // The vocabulary's rules state the same bounds, so a change to the settings names the file.
+    expect(readFileSync('scenarios/README.md', 'utf8')).toContain(`at most ${SEGMENT_DEADLINE.kanon} in a \`kanon\` segment and ${SEGMENT_DEADLINE.act} in an \`act\` segment, each job's timeout in [\`runner/settings.json\`](../runner/settings.json) (${SETTINGS.minutes.kanon} and ${SETTINGS.minutes.act}) less the ${SEGMENT_SETUP_MINUTES} minutes`);
+    // The issue's own example: each of the three steps is refused.
+    expect(validateSteps({ phases: [{ kanon: [step(45)], act: [step(60), { verb: 'expect.run', run: 'ci', conclusion: 'success', deadline: 120 }] }] })).toHaveLength(3);
   });
 
   it('refuses a deadline on a verb that doesn\'t wait', () => {
@@ -528,9 +545,9 @@ const EVERY_VERB = {
         { verb: 'expect.doctor', status: 'incomplete', exitCode: 4, unchecked: ['secrets'], absent: ['ruleset.missing'] },
       ],
       act: [
-        { verb: 'release.cut', deadline: 30 },
+        { verb: 'release.cut', deadline: 25 },
         { verb: 'expect.pr', pr: 'release', state: 'merged', author: 'kanon-e2e-releaser', deadline: 5 },
-        { verb: 'deployment.await-approval', environment: 'production', workflow: 'deploy.yml', deadline: 30 },
+        { verb: 'deployment.await-approval', environment: 'production', workflow: 'deploy.yml', deadline: 25 },
         { verb: 'issue.await', name: 'deploy-failed', author: 'github-actions', labels: ['bug'], deadline: 20 },
         { verb: 'expect.issue', issue: 'deploy-failed', state: 'open', deadline: 5 },
         { verb: 'expect.api', path: 'repos/{{repository}}/rulesets', pointer: '/0/name', equals: 'Kanon: default branch', deadline: 5 },

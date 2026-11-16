@@ -34,7 +34,7 @@ export const objects = (fields, o = {}) => ({ type: 'objects', fields, ...o });
 /** Any JSON value, for the verb's own check to hold. @param {object} [o] */
 export const json = (o = {}) => ({ type: 'json', ...o });
 
-/** The deadline every waiting verb takes, in minutes, within the scenario's 120 (§4.1). */
+/** The deadline every waiting verb takes, in minutes, within the scenario's 120 (§4.1); runner/validate.mjs also holds it inside its segment's job (#180). */
 export const DEADLINE = int({ required: true, min: 1, max: 120 });
 
 /**
