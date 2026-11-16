@@ -8,7 +8,8 @@
 //   - scenario.json, field by field, as §4.1 states it;
 //   - start/ holds regular files only, with no substitution but `{{release}}` and `{{repository}}`;
 //   - steps.json needs at most three phases (§5.2), and each step's verb is in the vocabulary, in
-//     its kind of segment, with the arguments it takes and a `deadline` where it waits (§4.2, §10);
+//     its kind of segment, with the arguments it takes and a `deadline` where it waits (§4.2, §10),
+//     one its segment's job can outlive (#180);
 //   - an expectation names only a JSON field, a finding id or a known marker, and compares it to
 //     a value: never free text to match, never a field that holds it (§4.3);
 //   - `expect.api` reads only the scenario repository's own API;
@@ -24,11 +25,25 @@ import { pathToFileURL } from 'node:url';
 
 import { BRANCH, DEADLINE, WORKFLOW, bool, checkArgs, int, map, str, strs } from './lib/args.mjs';
 import { SUBSTITUTION, strangers } from './lib/substitute.mjs';
+import { SETTINGS } from './sizing.mjs';
 import { VOCABULARY } from './vocabulary.mjs';
 
 /** At most three phases, each a `kanon` job and then an `act` job (§5.2). */
 export const MAX_PHASES = 3;
 export const SEGMENTS = /** @type {const} */ (['kanon', 'act']);
+
+/**
+ * The minutes a segment's job keeps for itself, out of its timeout: its steps before the runner
+ * (the token, a checkout, Node, the downloads) and the runner's own before a step, then recording
+ * the result. 5, as the gate job's whole timeout is for a checkout, a download and one node script.
+ */
+export const SEGMENT_SETUP_MINUTES = 5;
+/**
+ * The longest `deadline` a step may take in each kind of segment (#180): its job's timeout
+ * (runner/settings.json), less the minutes above. GitHub kills a job at its timeout, and a step
+ * whose deadline is past it never gets to read `fail`: the scenario reads `infra`, or nothing.
+ */
+export const SEGMENT_DEADLINE = Object.freeze(Object.fromEntries(SEGMENTS.map((s) => [s, SETTINGS.minutes[s] - SEGMENT_SETUP_MINUTES])));
 
 /** The kinds of run `runsOn` names: a candidate's run (the poll, or a whole-catalogue dispatch for a candidate), any other dispatch, the nightly. */
 export const RUN_KINDS = /** @type {const} */ (['candidate', 'dispatch', 'scheduled']);
@@ -233,6 +248,9 @@ function stepProblems(step, segment, made, scope) {
     : undefined;
   if (v.waits && args.deadline === undefined) p.push(`\`${step.verb}\` waits, so it needs a \`deadline\` in minutes (Kanon plan 0012 §10)`);
   p.push(...checkArgs(specs, args, '', unknown).filter((e) => !(v.waits && e === '`deadline` is missing')));
+  if (v.waits && Number.isInteger(args.deadline) && args.deadline > SEGMENT_DEADLINE[segment]) {
+    p.push(`\`deadline\` ${args.deadline} can't pass in a \`${segment}\` segment: GitHub kills the \`${segment}\` job at ${SETTINGS.minutes[segment]} minutes, so the step would never read \`fail\`; a deadline here is at most ${SEGMENT_DEADLINE[segment]}, the job's timeout less the ${SEGMENT_SETUP_MINUTES} it keeps for itself (#180)`);
+  }
   if (v.check) p.push(...v.check(step, scope));
 
   for (const [key, text] of Object.entries(args).flatMap(([k, x]) => strings(x, k))) {
